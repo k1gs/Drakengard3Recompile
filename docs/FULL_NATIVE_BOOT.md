@@ -1,5 +1,7 @@
 # Полный native boot: 2026-10-14
 
+Этот отчёт фиксирует предыдущий этап. EDAT boundary уже пройден: актуальные resource API, OVIS, raw SPURS jobs и memory fixes описаны в `RESOURCE_API_PROGRESS.md`.
+
 ## Результат и границы
 
 Собран Windows x64 executable **полного PPU lift**, исполняющий стартовый код Drakengard 3 и читающий её локальное дерево ресурсов. Это уже не ограниченный startup probe. Прохождение игры, меню, отображение игрового кадра и управление **не подтверждены**.

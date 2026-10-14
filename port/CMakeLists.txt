@@ -149,7 +149,7 @@ if(PORT_ENABLE_SPU)
              "${PS3RECOMP_DIR}/runtime/spu/spu_dispatch_mt.c")
         # Generated beside the lift; each is present only once its generator
         # has been run, so each is included only if it is actually here.
-        foreach(gen IN ITEMS spu_workloads.c jobmods_register.c taskset_policy_bytes.c)
+        foreach(gen IN ITEMS spu_workloads.c raw_jobs_register.c jobmods_register.c taskset_policy_bytes.c)
             if(EXISTS "${SPU_DIR}/${gen}")
                 list(APPEND SPU_SOURCES "${SPU_DIR}/${gen}")
             else()
@@ -166,6 +166,11 @@ add_executable(${PROJECT_NAME}
     diagnostics.cpp
     compat_checks.cpp
     trophy_abi.cpp
+    resource_api.cpp
+    overlay_api.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/edat_compat.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/spu_workload_compat.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/sys_memory_compat.c"
     stubs.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
@@ -174,6 +179,9 @@ add_executable(${PROJECT_NAME}
 )
 if(NOT SPU_SOURCES)
     set_source_files_properties(stubs.cpp PROPERTIES COMPILE_DEFINITIONS PORT_WITHOUT_SPU)
+endif()
+if(NOT PORT_ENABLE_SPU OR NOT EXISTS "${SPU_DIR}/raw_jobs_register.c")
+    set_property(SOURCE stubs.cpp APPEND PROPERTY COMPILE_DEFINITIONS PORT_WITHOUT_RAW_JOBS)
 endif()
 
 # The lifted SPU sources use bare #include "spu_context.h". Scope that include

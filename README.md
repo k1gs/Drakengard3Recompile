@@ -2,7 +2,7 @@
 
 Цель: исследовать PS3-версию, проверить возможность статической перекомпиляции и постепенно получить самостоятельный Windows executable, читающий пользовательские данные игры. Стенд подготовлен, первый статический разбор предоставленной сборки NPUB31251 v1.01 выполнен. Работоспособного порта пока нет. Результаты, контрольные суммы и ограничения — в [первом отчёте](docs/FIRST_ANALYSIS.md).
 
-Последний результат: [полный native boot](docs/FULL_NATIVE_BOOT.md) — 51 057 PPU-функций и 40 SPU images, Windows/D3D12 сборка, реальное исполнение startup до FIOS/resource loading. Исправлены title ID и lwcond ABI. Следующий блокер — корректный доступ к EDAT-ресурсам; меню/геймплей пока не работают и не подтверждены. План продолжения — [HANDOFF](docs/HANDOFF.md).
+Последний результат: [native resource boot](docs/RESOURCE_API_PROGRESS.md) — полный PPU lift, 40 SPU ELF и raw SPURS jobs. Исправлены EDAT API, OVIS ABI и allocation table; читаются config/cooked packages, исполняется shader job. Меню/корректный кадр/геймплей пока не подтверждены. План продолжения — [HANDOFF](docs/HANDOFF.md).
 
 ## Быстрый старт
 

@@ -1,7 +1,9 @@
 """Apply narrow, checked compatibility fixes to a build-local SDK source copy."""
 import argparse
 import hashlib
+import re
 from pathlib import Path
+from prepare_edat import prepare as prepare_edat
 
 
 def patch_sysprx(text):
@@ -38,17 +40,61 @@ def main():
     print(f'Prepared lwcond ABI correction from SDK SHA256 {hashlib.sha256(raw).hexdigest()}')
     fs_source = a.sdk / 'runtime/ppu/ppu_fs.cpp'
     fs_text = fs_source.read_text(encoding='utf-8')
+    fs_text = fs_text.replace('const char* use = edat_resolve(hpath, dec_path, sizeof dec_path);',
+                              'const char* use = port_edat_resolve(hpath, dec_path, sizeof dec_path);')
     old = 'if (use != hpath) snprintf(hpath, sizeof hpath, "%s", use); }'
     if fs_text.count(old) != 2:
         raise ValueError('SDK filesystem resolve sites changed')
     fs_text = fs_text.replace(old, old+'\n    if (edat_is_npd(hpath)) port_resource_blocker(gpath);')
     # A failed decode must never expose ciphertext as a cooked UE3 package.
-    fs_text = 'extern "C" [[noreturn]] void port_resource_blocker(const char*);\n'+fs_text
+    fs_text = ('#include <stddef.h>\n'
+               'extern "C" const char* port_edat_resolve(const char*, char*, size_t);\n'
+               'extern "C" [[noreturn]] void port_resource_blocker(const char*);\n')+fs_text
+    marker = '/* ---- handlers ---- */'
+    if fs_text.count(marker) != 1:
+        raise ValueError('FS host-path bridge anchor changed')
+    fs_text = fs_text.replace(marker,
+        'extern "C" void port_fs_host_path(char* out, size_t cap, const char* guest) { host_path(out, cap, guest); }\n'+marker)
     for relative in ('../../libs/filesystem/edat.h', '../platform/win32_dirent.h', '../platform/win32_backtrace.h'):
         fs_text = fs_text.replace('"'+relative+'"', '"'+(fs_source.parent/relative).resolve().as_posix()+'"')
     fs_out = a.out.parent/'ppu_fs.cpp'
     if not fs_out.exists() or fs_out.read_text(encoding='utf-8') != fs_text:
         fs_out.write_text(fs_text, encoding='utf-8')
+    prepare_edat(a.sdk, a.out.parent/'edat_compat.c')
+    workload = a.sdk/'runtime/spu/spu_workload.c'
+    text = workload.read_text(encoding='utf-8')
+    anchor = '        return 0;\n    }\n    /* Two lines plus two explicit flushes PER JOB.'
+    if text.count(anchor) != 1:
+        raise ValueError('SPU job-miss anchor changed')
+    text = text.replace(anchor, '        port_spu_job_missing(fp, image_size, job_ea);\n'+anchor)
+    text = '#include <stdint.h>\nvoid port_spu_job_missing(uint64_t, uint32_t, uint32_t);\n'+text
+    def relocate(match):
+        candidate = workload.parent/match.group(1)
+        return '#include "'+candidate.resolve().as_posix()+'"' if candidate.is_file() else match.group(0)
+    text = re.sub(r'#include "([^"]+)"', relocate, text)
+    out = a.out.parent/'spu_workload_compat.c'
+    if not out.exists() or out.read_text(encoding='utf-8') != text:
+        out.write_text(text, encoding='utf-8')
+    # One tracked record per possible 64-KiB page in the 256-MiB window.
+    # Only sys_memory.c consumes this array; keep other SDK files untouched.
+    memory_header=a.sdk/'runtime/syscalls/sys_memory.h'
+    text=memory_header.read_text(encoding='utf-8')
+    old='#define SYS_MEMORY_ALLOC_MAX      1024'
+    if text.count(old)!=1:
+        raise ValueError('Memory allocation table declaration changed')
+    text=text.replace(old,'#define SYS_MEMORY_ALLOC_MAX      4096')
+    def memory_include(match):
+        candidate=memory_header.parent/match.group(1)
+        return '#include "'+candidate.resolve().as_posix()+'"' if candidate.is_file() else match.group(0)
+    text=re.sub(r'#include "([^"]+)"',memory_include,text)
+    header_out=a.out.parent/'sys_memory_compat.h'
+    if not header_out.exists() or header_out.read_text(encoding='utf-8')!=text:
+        header_out.write_text(text,encoding='utf-8')
+    source=a.sdk/'runtime/syscalls/sys_memory.c'
+    text=source.read_text(encoding='utf-8').replace('"sys_memory.h"','"'+header_out.resolve().as_posix()+'"')
+    out=a.out.parent/'sys_memory_compat.c'
+    if not out.exists() or out.read_text(encoding='utf-8')!=text:
+        out.write_text(text,encoding='utf-8')
 
 
 if __name__ == '__main__':

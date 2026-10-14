@@ -11,12 +11,16 @@ if ((Get-FileHash $elf -Algorithm SHA256).Hash -ne '454fb591e9192cf9d4a5c65912eb
 }
 $runDir = Join-Path $root "work/native-runs/$Run"
 New-Item -ItemType Directory -Force $runDir | Out-Null
+$jobDir = Join-Path $runDir 'spu-job-dumps'
+New-Item -ItemType Directory -Force $jobDir | Out-Null
 $values = @{
     PS3_VFS_ROOT=(Join-Path $root 'work/extracted');
     PS3_HDD0_ROOT=(Join-Path $root 'work/native-state/dev_hdd0');
     PS3_DEV_FLASH=(Join-Path $root 'tools/rpcs3/dev_flash');
     PS3_BOOT_PATH='/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN';
     PS3_HLE_UNRESOLVED='fail'
+    PS3_EDAT_CACHE=(Join-Path $runDir 'edat-cache')
+    SPU_DUMP_MISS=$jobDir
 }
 $previous = @{}
 $process = $null

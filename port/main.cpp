@@ -45,7 +45,9 @@
 extern "C" void port_install_diagnostics();
 extern "C" void cellGame_init_from_paramsfo(const char*);
 extern "C" void drakengard_spu_register_all();
+extern "C" void drakengard_raw_jobs_register_all();
 extern "C" int port_check_lwcond_layout();
+extern "C" int port_check_memory_table();
 extern "C" void port_register_compatibility();
 
 #ifdef _WIN32
@@ -340,6 +342,7 @@ int main(int argc, char** argv)
         return 1;
     }
     if (strcmp(argv[1], "--check-lwcond") == 0) return port_check_lwcond_layout();
+    if (strcmp(argv[1], "--check-memory") == 0) return port_check_memory_table();
 
     uint32_t entry = ppu_load_elf(argv[1]);
     if (!entry) {
@@ -355,6 +358,7 @@ int main(int argc, char** argv)
 
     ppu_recomp_register();   /* lifted function table -> address map */
     drakengard_spu_register_all();
+    drakengard_raw_jobs_register_all();
     ps3_load_prx_modules();  /* this game's lifted system PRX, if it has any */
     ppu_hle_init();          /* firmware import NID -> HLE handlers */
     ppu_sysprx_register();   /* boot-critical CRT */

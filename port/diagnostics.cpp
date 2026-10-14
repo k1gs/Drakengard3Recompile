@@ -45,6 +45,22 @@ extern "C" [[noreturn]] void port_resource_blocker(const char* path)
     std::exit(5);
 }
 
+extern "C" [[noreturn]] void port_compatibility_blocker(const char* api)
+{
+    fprintf(stderr, "[compatibility-blocker] %s\n", api);
+    guest_context();
+    fflush(stderr);
+    std::exit(6);
+}
+
+extern "C" void port_spu_job_missing(uint64_t fingerprint, uint32_t size, uint32_t job)
+{
+    fprintf(stderr,"[spu-job-blocker] unregistered raw SPURS job fp=%016llX size=%u descriptor=%08X\n",
+            (unsigned long long)fingerprint,size,job);
+    fflush(stderr);
+    std::exit(7);
+}
+
 #ifdef _WIN32
 static LONG WINAPI crash_filter(EXCEPTION_POINTERS* ep)
 {

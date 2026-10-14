@@ -1,14 +1,15 @@
 # Передача работы — Drakengard 3, 2026-10-14
 
-Последний этап — **полный native boot**, не малый startup probe. Читать `docs/FULL_NATIVE_BOOT.md`: PPU 51 057 функций, 40 SPU images, исправление 8-byte lwcond ABI, запуск до FIOS/EDAT resource boundary. Приоритет дальше — корректный ресурсный API/формат и последующая проверка SPU execution, затем реальный кадр/меню/управление. Заглушки success и пропуск неизвестных инструкций не использовать. Старые пункты ниже описывают историю исследования.
+Последний этап — **native resource boot**. Читать `docs/RESOURCE_API_PROGRESS.md`: EDAT/config читается, OVIS цикл пройден, два raw jobs исполняются, основные packages открываются; исправлен лимит allocation records. Run 015: 90s, OOM нет, 469+3 raw-job HIT/rc=0. Следующее — `cellSpursQueuePopBody` 0x91066667, SPU event delivery и task lifecycle. Raw-job MISS/unknown ISA operations останавливаются. Реальный кадр/меню/управление ещё нужны. Старые пункты ниже — история исследования.
 
 ## Что читать сначала
 
 1. `CURRENT_STATE.md` — актуальная сводка; нижние разделы подготовки исторические.
-2. `docs/FULL_NATIVE_BOOT.md` — актуальная сборка, команды, traces, runtime patches и блокеры.
-3. `docs/NATIVE_STARTUP_PROBE.md` — исторические bounded checks, 176 initializers и boot/TLS-контракт.
-4. `docs/FIRST_ANALYSIS.md` — исходный статический разбор и RPCS3 execution traces.
-5. `docs/PORTING_PLAN.md` — общий маршрут до самостоятельного PC executable.
+2. `docs/RESOURCE_API_PROGRESS.md` — актуальные API/jobs/memory fixes, tests и traces.
+3. `docs/FULL_NATIVE_BOOT.md` — предыдущая сборка до EDAT и история ABI fixes.
+4. `docs/NATIVE_STARTUP_PROBE.md` — исторические bounded checks и boot/TLS-контракт.
+5. `docs/FIRST_ANALYSIS.md` — исходный статический разбор и RPCS3 execution traces.
+6. `docs/PORTING_PLAN.md` — общий маршрут до самостоятельного PC executable.
 
 ## Подготовленный вход
 

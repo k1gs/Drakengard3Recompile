@@ -2,11 +2,37 @@
 #include "ps3emu/nid.h"
 #include <cstdio>
 #include <cstring>
+#include <array>
 
 extern "C" unsigned char* vm_base;
 extern "C" void ppu_sysprx_register();
 extern "C" void ps3_hle_call(uint32_t, ppu_context*);
 extern "C" uint32_t vm_read32(uint64_t);
+extern "C" int64_t sys_memory_allocate(ppu_context*);
+extern "C" int64_t sys_memory_free(ppu_context*);
+
+extern "C" int port_check_memory_table()
+{
+    std::array<uint32_t,1025> addresses{};
+    ppu_context ctx{};
+    unsigned count=0;
+    for(;count<addresses.size();++count) {
+        ctx.gpr[3]=0x10000; ctx.gpr[4]=0x200; ctx.gpr[5]=0x32000;
+        int64_t rc=sys_memory_allocate(&ctx);
+        if(rc) {
+            fprintf(stderr,"[compat-check] memory allocation %u failed rc=%08llX\n",count+1,(unsigned long long)rc);
+            return 1;
+        }
+        addresses[count]=vm_read32(0x32000);
+        if(count && addresses[count]<addresses[count-1]+0x10000) return 2;
+    }
+    for(auto address:addresses) {
+        ctx.gpr[3]=address;
+        if(sys_memory_free(&ctx)) return 3;
+    }
+    fprintf(stderr,"[compat-check] 1025 live 64-KiB allocations, unique ranges, free: PASS\n");
+    return 0;
+}
 
 // Exercise the actual registered handler with guest BE memory and guard bytes.
 // This catches the former 64-bit pointer/+8 queue write and its adjacent overwrite.
