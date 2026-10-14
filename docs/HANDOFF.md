@@ -1,4 +1,22 @@
-# Передача работы — Drakengard 3, 2026-10-14
+# Передача работы — Drakengard 3, 2026-10-15
+
+Код текущего этапа зафиксирован коммитом `328e3e9`. Проверки перед публикацией: portable 21/21, шесть native checks PASS, interpreter HALT — ожидаемый exit 8. Следующий blocker — `_cellSpursLFQueuePushBody`; игрового кадра нет. Упоминания local/uncommitted ниже относятся к истории предыдущих прогонов.
+
+Читать первым `LFQUEUE_PROGRESS.md`. Следующий реальный API gap — _cellSpursLFQueuePushBody, q4042AF00, mode3, 32-byte input; consumer image42 / ELF017A9780. Свежая LF init исправлена (отдельная ABI от plain Spurs queue), push fail-closed exit6 до вторичного OOM. PDB показал: большой размер — output stack word после NULL resource method, не kernel rounding. Не подставлять counts/success; реализовать queue protocol, проверить реальный SPU completion/event01A54E80 и только затем resource query/frames.
+
+Читать первым `MEMORY_REUSE_PROGRESS.md`: freed-page reuse исправлен и проверен до FAIL/после PASS. Run 039 проходит прежний OOM 32900, затем запрашивает ~792 MiB одним блоком; исследовать PPU caller и источник размера. Изображение пока чёрное. GPU writer trace показывает реальные SPU DMA patches; различия между прогонами с диагностикой не считать доказанным synchronization fix. Ни guard timeout, ни размеры игры вручную не подменены.
+
+Финальный checkpoint: build 046, runs 039/040 завершены по лимиту 180/120s; кадры нулевые. Run 040: большой запрос уже 174 MiB, tid 21 / LR 008C2C54, saved stack через 00C04B0C+5F0. Размер между прогонами различается; причина ещё не установлена. Подробности и следующий эксперимент — в MEMORY_REUSE_PROGRESS.md. Все четыре native regression checks PASS.
+
+Читать первым `docs/GPU_FIFO_PROGRESS.md`. Resync пропускал команды и fence между self-JUMP и PUT; исправлено сохранением GET/stream. Native `--check-gcm-park` до FAIL/после PASS. Run 035: GET 0xE9690 (EA 0x400E9690, word 0x200E9690), PUT 0xEF0C8; head не исправлен производителем в двух поздних снимках. Следить за PPU writes/SPU DMA и shader-job completion, не пропускать команды и не двигать label вручную. Run 032 FIFO dumps неверно mapped (PPU code); использовать 033 и 035 с реальным SDK IO mapping. Build 040, всё локально, все процессы остановлены.
+
+Следующий разбор: RenderingThread 20 в `008B0BB0`/LR `008B0D18` ждёт GPU label `20000FF0`, value на один меньше target. Run 031: 0x4CB vs 0x4CC, FIFO GET=PUT=0xE9048. Проверить packet 0x1D6C/0x1D70 и публикацию PUT. `GCM_DRAINDBG=1` показывает drain, `PORT_PPU_SAMPLE=1` — label/object/target. Сам label не подставлять под ожидание. Build 033, все процессы остановлены.
+
+Читать первым `docs/SPURS_TASK_IDENTITY.md`: Havok image 54 получил чужой TaskInfo image 63 — это исправлено, а не обойдено. Enqueue использует explicit taskset/slot, immutable TaskInfo и running claim. Native snapshot/dedup PASS; run 028 120s без прежнего HALT. Меню пока нет, captures чёрные. Дальше RenderingThread 20 и queue 11; `PORT_PPU_SAMPLE=1` пишет три снимка последних прямых call sites. Изменения локальные, published HEAD `87255ed`.
+
+Продолжение 2026-10-15: сначала `docs/SPU_OVERLAY_PROGRESS.md`. Исправлен interpreter return boundary, audio EventFlag даёт реальные WAKE. Runtime-loaded codec из встроенного ELF 27 работает через interpreter, исходный lift остаётся native. Новый подтверждённый blocker — HALT-ASSERT image 54 LS 0x05098, run 026 exit 8; полный LS/GPR в ignored work/. Исследовать DMA/control block 0x1D780 и происхождение невыровненного указателя 0x47254508. Не менять assert/не подделывать completion. Меню не появилось; renderer samples чёрные. Все процессы остановлены, изменения не закоммичены.
+
+Актуальное продолжение: `docs/SPURS_QUEUE_PROGRESS.md`. Очереди потребляют реальные SPU records; ELF IDs перенесены в 41..80, raw jobs остаются 100/101. Run 020: 90s, OOM/MISS нет, остановлен по времени. Native FIFO/wrap/blocking producer PASS; portable tests 21/21. Следующее — фактическое изображение и связь event waits с производителями. CreateTask log ID является глобальным счётчиком, сам по себе не доказывает утечку. Меню/управление ещё не подтверждены. Описание resource stage ниже историческое.
 
 Последний этап — **native resource boot**. Читать `docs/RESOURCE_API_PROGRESS.md`: EDAT/config читается, OVIS цикл пройден, два raw jobs исполняются, основные packages открываются; исправлен лимит allocation records. Run 015: 90s, OOM нет, 469+3 raw-job HIT/rc=0. Следующее — `cellSpursQueuePopBody` 0x91066667, SPU event delivery и task lifecycle. Raw-job MISS/unknown ISA operations останавливаются. Реальный кадр/меню/управление ещё нужны. Старые пункты ниже — история исследования.
 

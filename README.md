@@ -1,5 +1,19 @@
 # Drakengard 3 — стенд для исследования и PC-переноса
 
+Код текущего этапа зафиксирован коммитом `328e3e9`. Проверки перед публикацией: portable 21/21, шесть native checks PASS, interpreter HALT — ожидаемый exit 8. Следующий blocker — `_cellSpursLFQueuePushBody`; игрового кадра нет. Упоминания local/uncommitted ниже относятся к истории предыдущих прогонов.
+
+Актуальный этап: [LF queue](docs/LFQUEUE_PROGRESS.md) — исправлена свежая инициализация ANY2ANY LFQueue. Большие запросы памяти прослежены до пустого resource query; запуск теперь явно останавливается на более раннем отсутствующем LFQueuePushBody. Следующее — реальная отправка и обработка задания SPU. Рабочего меню/кадра пока нет.
+
+Актуальный этап: [memory reuse](docs/MEMORY_REUSE_PROGRESS.md) — исправлено повторное использование освобождённых kernel pages, native regression до FAIL/после PASS. Загрузка прошла прежний OOM, следующий blocker — отдельный запрос ~792 MiB. Меню и игровой кадр пока не получены.
+
+Актуальный этап: [GPU FIFO](docs/GPU_FIFO_PROGRESS.md) — исправлено отбрасывание команд при self-JUMP; native before/after проверка подтверждает сохранение потока. Следующий участок — producer, который должен освободить parked FIFO. Рабочего изображения пока нет.
+
+Текущий этап: [SPURS task identity](docs/SPURS_TASK_IDENTITY.md) — исправлена передача чужого TaskInfo в Havok SPU, native snapshot/dedup проверка проходит. Прогон 120s без прежнего HALT; изображение пока чёрное.
+
+Обновление 2026-10-15: [SPU overlays](docs/SPU_OVERLAY_PROGRESS.md) — исправлен возврат из interpreter fallback, audio EventFlag реально просыпается. Следующий blocker: Havok HALT на проверке выравнивания; состояние сохранено для разбора. Изображение пока чёрное.
+
+Актуальный этап: [SPURS queues](docs/SPURS_QUEUE_PROGRESS.md) — PPU получает реальные записи от SPU; исправлена коллизия image IDs с адаптерами SDK для других игр. Очереди проверены на FIFO/wrap/blocking producer. Работоспособное меню пока не подтверждено.
+
 Цель: исследовать PS3-версию, проверить возможность статической перекомпиляции и постепенно получить самостоятельный Windows executable, читающий пользовательские данные игры. Стенд подготовлен, первый статический разбор предоставленной сборки NPUB31251 v1.01 выполнен. Работоспособного порта пока нет. Результаты, контрольные суммы и ограничения — в [первом отчёте](docs/FIRST_ANALYSIS.md).
 
 Последний результат: [native resource boot](docs/RESOURCE_API_PROGRESS.md) — полный PPU lift, 40 SPU ELF и raw SPURS jobs. Исправлены EDAT API, OVIS ABI и allocation table; читаются config/cooked packages, исполняется shader job. Меню/корректный кадр/геймплей пока не подтверждены. План продолжения — [HANDOFF](docs/HANDOFF.md).
