@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidateRange(5,300)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001')
+param([ValidateRange(5,300)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001', [switch]$CaptureFrames)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $exe = Join-Path $root 'build/game/DrakengardRecompile.exe'
@@ -13,6 +13,8 @@ $runDir = Join-Path $root "work/native-runs/$Run"
 New-Item -ItemType Directory -Force $runDir | Out-Null
 $jobDir = Join-Path $runDir 'spu-job-dumps'
 New-Item -ItemType Directory -Force $jobDir | Out-Null
+$fifoDir = Join-Path $runDir 'gpu-fifo-dumps'
+New-Item -ItemType Directory -Force $fifoDir | Out-Null
 $values = @{
     PS3_VFS_ROOT=(Join-Path $root 'work/extracted');
     PS3_HDD0_ROOT=(Join-Path $root 'work/native-state/dev_hdd0');
@@ -21,8 +23,22 @@ $values = @{
     PS3_HLE_UNRESOLVED='fail'
     PS3_EDAT_CACHE=(Join-Path $runDir 'edat-cache')
     SPU_DUMP_MISS=$jobDir
+    PORT_FIFO_DUMP_DIR=$fifoDir
 }
 $previous = @{}
+$diagnostics = @{}
+foreach ($name in @('SPU_INTERP_UNLIFTED','PS3_WAITBT','PS3_SPU_PCWATCH','SPU_DUMP_OVL','YDKJ_SPU_TRACE','SPU_CALLTRACE','PORT_EVENT_TRACE','PORT_PPU_SAMPLE','GCM_DRAINDBG','GCM_CTXDBG','GCM_RECDBG','PORT_GPU_WRITERS','PORT_ALLOC_TRACE')) {
+    $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+    if ($null -ne $value) { $diagnostics[$name]=$value }
+}
+if ($CaptureFrames) {
+    # Renderer GPU readback, scoped to this child and this ignored run directory.
+    $values.CELLMARK_DUMP='12'
+    $values.CELLMARK_DUMP_EVERY='120'
+    $values.CELLMARK_DUMP_MINDRAWS='1'
+    $values.CELLMARK_DUMP_DIR=$runDir
+}
+$exeHash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
 $process = $null
 $started = [DateTime]::UtcNow
 try {
@@ -40,9 +56,10 @@ try {
     @{
         started_utc=$started.ToString('o'); duration_seconds=([DateTime]::UtcNow-$started).TotalSeconds;
         pid=$process.Id; exit_code=$tracked.ExitCode; stopped_at_time_limit=$timedOut;
-        exe_sha256=(Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant();
+        exe_sha256=$exeHash;
         elf_sha256=(Get-FileHash $elf -Algorithm SHA256).Hash.ToLowerInvariant();
         environment=$values; working_directory=$runDir;
+        inherited_diagnostics=$diagnostics;
         validation='Bounded native boot trace; no visual/menu/gameplay validation. Unknown imports return errors, not fake success.'
     } | ConvertTo-Json -Depth 4 | Set-Content "$prefix.json"
 } finally {

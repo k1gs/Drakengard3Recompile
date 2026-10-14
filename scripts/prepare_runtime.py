@@ -4,6 +4,10 @@ import hashlib
 import re
 from pathlib import Path
 from prepare_edat import prepare as prepare_edat
+from prepare_spu_dispatch import prepare as prepare_spu_dispatch
+from prepare_spu_tasks import workload as prepare_tasks, prepare_spurs
+from prepare_gcm import prepare as prepare_gcm
+from prepare_memory import prepare as prepare_memory
 
 
 def patch_sysprx(text):
@@ -29,6 +33,49 @@ def main():
     p.add_argument('--sdk', type=Path, required=True)
     p.add_argument('--out', type=Path, required=True)
     a = p.parse_args()
+    prepare_spu_dispatch(a.sdk, a.out.parent)
+    prepare_spurs(a.sdk, a.out.parent)
+    prepare_gcm(a.sdk, a.out.parent)
+    loader=a.sdk/'runtime/ppu/ppu_loader.cpp'
+    loader_text=loader.read_text(encoding='utf-8')
+    anchor='        ppu_context* c = g_resv_ctxs[i];\n        if (!c) continue;\n        fprintf(stderr, "[WATCHDOG]'
+    if loader_text.count(anchor)!=1:
+        raise ValueError('PPU context sample anchor changed')
+    loader_text=loader_text.replace(anchor,anchor.replace('        fprintf(stderr,', '        port_trace_ppu_context(c);\n        fprintf(stderr,'))
+    loader_text='extern "C" void port_trace_ppu_context(void*);\n'+loader_text
+    anchor='void vm_write32(uint64_t a, uint32_t v) {'
+    if loader_text.count(anchor)!=1: raise ValueError('PPU write trace anchor changed')
+    loader_text=loader_text.replace(anchor,anchor+' port_gpu_ppu_write(a,v,__builtin_return_address(0));')
+    anchor='void vm_write64(uint64_t a, uint64_t v) {'
+    if loader_text.count(anchor)!=1: raise ValueError('PPU 64-bit write trace anchor changed')
+    loader_text=loader_text.replace(anchor,anchor+' port_gpu_ppu_write(a,(unsigned int)(v>>32),__builtin_return_address(0)); port_gpu_ppu_write(a+4,(unsigned int)v,__builtin_return_address(0));')
+    loader_text='extern "C" void port_gpu_ppu_write(unsigned long long,unsigned int,void*);\n'+loader_text
+    anchor='extern "C" void ps3_indirect_call(ppu_context* ctx)\n{'
+    if loader_text.count(anchor)!=1: raise ValueError('Indirect allocation trace anchor changed')
+    loader_text=loader_text.replace(anchor,anchor+'\n    port_trace_allocation_call(ctx,__builtin_return_address(0));')
+    loader_text='extern "C" void port_trace_allocation_call(void*,void*);\n'+loader_text
+    def loader_include(match):
+        candidate=loader.parent/match.group(1)
+        return '#include "'+candidate.resolve().as_posix()+'"' if candidate.is_file() else match.group(0)
+    loader_text=re.sub(r'#include "([^"]+)"',loader_include,loader_text)
+    loader_out=a.out.parent/'ppu_loader_compat.cpp'
+    if not loader_out.exists() or loader_out.read_text(encoding='utf-8')!=loader_text:
+        loader_out.write_text(loader_text,encoding='utf-8')
+    event_source=a.sdk/'runtime/syscalls/sys_event.c'
+    event_text=event_source.read_text(encoding='utf-8')
+    anchor='    uint64_t timeout_us  = LV2_ARG_U64(ctx, 2);'
+    # Only the queue-receive function has this exact declaration.
+    if event_text.count(anchor)!=1:
+        raise ValueError('Event receive diagnostic anchor changed')
+    event_text=event_text.replace(anchor,anchor+'\n    port_event_wait_trace(ctx);')
+    event_text='void port_event_wait_trace(void*);\n'+event_text
+    def event_include(match):
+        candidate=event_source.parent/match.group(1)
+        return '#include "'+candidate.resolve().as_posix()+'"' if candidate.is_file() else match.group(0)
+    event_text=re.sub(r'#include "([^"]+)"',event_include,event_text)
+    event_out=a.out.parent/'sys_event_compat.c'
+    if not event_out.exists() or event_out.read_text(encoding='utf-8')!=event_text:
+        event_out.write_text(event_text,encoding='utf-8')
     source = a.sdk / 'runtime/ppu/ppu_sysprx.cpp'
     raw = source.read_bytes()
     text = patch_sysprx(raw.decode('utf-8'))
@@ -63,6 +110,7 @@ def main():
     prepare_edat(a.sdk, a.out.parent/'edat_compat.c')
     workload = a.sdk/'runtime/spu/spu_workload.c'
     text = workload.read_text(encoding='utf-8')
+    text = prepare_tasks(text)
     anchor = '        return 0;\n    }\n    /* Two lines plus two explicit flushes PER JOB.'
     if text.count(anchor) != 1:
         raise ValueError('SPU job-miss anchor changed')
@@ -92,6 +140,7 @@ def main():
         header_out.write_text(text,encoding='utf-8')
     source=a.sdk/'runtime/syscalls/sys_memory.c'
     text=source.read_text(encoding='utf-8').replace('"sys_memory.h"','"'+header_out.resolve().as_posix()+'"')
+    text=prepare_memory(text)
     out=a.out.parent/'sys_memory_compat.c'
     if not out.exists() or out.read_text(encoding='utf-8')!=text:
         out.write_text(text,encoding='utf-8')

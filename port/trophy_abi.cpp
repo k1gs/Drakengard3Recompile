@@ -10,6 +10,7 @@ extern "C" void ps3_hle_register_ctx(uint32_t, const char*, void (*)(ppu_context
 extern "C" int32_t sceNpTrophyGetGameInfo(int32_t, int32_t, void*, void*);
 extern "C" void port_register_resource_api();
 extern "C" void port_register_overlay_api();
+extern "C" void port_register_queue_api();
 
 static void game_info_be(ppu_context* ctx)
 {
@@ -36,6 +37,7 @@ extern "C" void port_register_compatibility()
 {
     port_register_resource_api();
     port_register_overlay_api();
+    port_register_queue_api();
     ps3_hle_register_ctx(ps3_compute_nid("sceNpTrophyGetGameInfo"),
                         "sceNpTrophyGetGameInfo (BE output)", game_info_be);
 }

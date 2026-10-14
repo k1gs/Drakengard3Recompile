@@ -48,6 +48,11 @@ extern "C" void drakengard_spu_register_all();
 extern "C" void drakengard_raw_jobs_register_all();
 extern "C" int port_check_lwcond_layout();
 extern "C" int port_check_memory_table();
+extern "C" int port_check_queue();
+extern "C" int port_check_spu_return();
+extern "C" int port_check_spu_task_snapshot();
+extern "C" int port_check_gcm_park();
+extern "C" int port_check_spu_interpreter_halt();
 extern "C" void port_register_compatibility();
 
 #ifdef _WIN32
@@ -343,6 +348,11 @@ int main(int argc, char** argv)
     }
     if (strcmp(argv[1], "--check-lwcond") == 0) return port_check_lwcond_layout();
     if (strcmp(argv[1], "--check-memory") == 0) return port_check_memory_table();
+    if (strcmp(argv[1], "--check-queue") == 0) return port_check_queue();
+    if (strcmp(argv[1], "--check-spu-return") == 0) return port_check_spu_return();
+    if (strcmp(argv[1], "--check-spu-task-snapshot") == 0) return port_check_spu_task_snapshot();
+    if (strcmp(argv[1], "--check-gcm-park") == 0) return port_check_gcm_park();
+    if (strcmp(argv[1], "--check-spu-interpreter-halt") == 0) return port_check_spu_interpreter_halt();
 
     uint32_t entry = ppu_load_elf(argv[1]);
     if (!entry) {

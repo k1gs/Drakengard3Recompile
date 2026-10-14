@@ -108,7 +108,7 @@ endif()
 # library: every one of these files #includes the lifter's per-game
 # ppu_recomp.h, so they can only be built against a particular lift.
 set(PS3RECOMP_SCAFFOLD
-    "${PS3RECOMP_DIR}/runtime/ppu/ppu_loader.cpp"
+    "${CMAKE_CURRENT_BINARY_DIR}/ppu_loader_compat.cpp"
     "${PS3RECOMP_DIR}/runtime/ppu/ppu_hle.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/ppu_fs.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/ppu_sysprx.cpp"
@@ -151,7 +151,15 @@ if(PORT_ENABLE_SPU)
         # has been run, so each is included only if it is actually here.
         foreach(gen IN ITEMS spu_workloads.c raw_jobs_register.c jobmods_register.c taskset_policy_bytes.c)
             if(EXISTS "${SPU_DIR}/${gen}")
-                list(APPEND SPU_SOURCES "${SPU_DIR}/${gen}")
+                if(gen STREQUAL "spu_workloads.c")
+                    execute_process(COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/namespace_spu_registry.py"
+                        "${SPU_DIR}/${gen}" --out "${CMAKE_CURRENT_BINARY_DIR}/spu_workloads_compat.c"
+                        COMMAND_ERROR_IS_FATAL ANY)
+                    list(APPEND SPU_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/spu_workloads_compat.c")
+                else()
+                    list(APPEND SPU_SOURCES "${SPU_DIR}/${gen}")
+                endif()
             else()
                 message(STATUS "  (no ${gen} -- not registered)")
             endif()
@@ -165,12 +173,22 @@ add_executable(${PROJECT_NAME}
     main.cpp
     diagnostics.cpp
     compat_checks.cpp
+    spu_dispatch_checks.cpp
+    spu_task_checks.cpp
+    gcm_checks.cpp
+    gpu_writer_trace.cpp
     trophy_abi.cpp
     resource_api.cpp
     overlay_api.cpp
+    queue_api.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/edat_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/spu_workload_compat.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/spu_channels_compat.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/spu_interp_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/sys_memory_compat.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/sys_event_compat.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/cellSpurs_compat.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/cellGcmSys_compat.c"
     stubs.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
