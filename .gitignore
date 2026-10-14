@@ -1,0 +1,24 @@
+# User-supplied originals, generated code and local tools never belong in source control.
+/NPUB31251-*/
+/input/
+/work/
+/reports/
+/tools/
+/third_party/
+/.venv/
+/build/
+__pycache__/
+*.pyc
+*.iso
+*.pkg
+*.rap
+*.rif
+*.self
+*.sprx
+*.elf
+*.bin
+*.upk
+*.u
+*.xxx
+*.bik
+*.pam

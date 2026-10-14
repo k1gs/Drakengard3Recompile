@@ -1,93 +1,56 @@
-# Drakengard recompile
+# Drakengard 3 — стенд для исследования и PC-переноса
 
+Цель: исследовать PS3-версию, проверить возможность статической перекомпиляции и постепенно получить самостоятельный Windows executable, читающий пользовательские данные игры. Стенд подготовлен, первый статический разбор предоставленной сборки NPUB31251 v1.01 выполнен. Работоспособного порта пока нет. Результаты, контрольные суммы и ограничения — в [первом отчёте](docs/FIRST_ANALYSIS.md).
 
+## Быстрый старт
 
-## Getting started
+Из PowerShell в корне проекта:
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://gitlab.thebakerc.at/k1gs/drakengard-recompile.git
-git branch -M main
-git push -uf origin main
+```powershell
+.\scripts\doctor.ps1
+.\scripts\start-ghidra.ps1
 ```
 
-## Integrate with your tools
+Воспроизводимая подготовка и проверки:
 
-* [Set up project integrations](https://gitlab.thebakerc.at/k1gs/drakengard-recompile/-/settings/integrations)
+```powershell
+.\scripts\bootstrap.ps1
+.\scripts\build-spu-extension.ps1
+.\scripts\build-runtime.cmd
+.\scripts\check-toolchain.cmd
+.\scripts\check-ghidra.ps1
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
 
-## Collaborate with your team
+Bootstrap скачивает официальные архивы, фиксирует ревизии/SHA-256 в `reports/`, проверяет опубликованные digest для бинарных релизов. LLVM распаковывается через 7-Zip без запуска установщика. Глобальные PATH и настройки Java не меняются. Для Python: `python -m venv .venv`, затем `.\.venv\Scripts\python.exe -m pip install -r third_party\ps3recomp\tools\requirements.txt`. Фактически установленные версии записаны в `reports/python-lock.txt`; для повторной установки можно передать этот файл в `pip install -r`.
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+RPCS3: `tools/rpcs3/rpcs3.exe`. Это отдельный локальный экземпляр для эталонных прогонов. Firmware, аккаунты, лицензии и игра не входят в стенд. До начала эталонного прогона установить firmware по официальной инструкции RPCS3 и добавить собственные подготовленные файлы игры.
 
-## Test and Deploy
+## Каталоги
 
-Use the built-in continuous integration in GitLab.
+| Путь | Назначение |
+| --- | --- |
+| `input/` | Подготовленные пользователем файлы; только чтение при анализе |
+| `work/` | Рабочие копии, Ghidra-проекты, отчёты loader/lifter, сгенерированный код |
+| `reports/` | Версии, контрольные суммы, логи сборки и проверок |
+| `third_party/` | Снимки исходников внешних инструментов с их лицензиями |
+| `tools/` | Переносимые инструменты, архивы, Gradle-кеш |
+| `build/` | Локальные результаты сборки |
+| `docs/PORTING_PLAN.md` | Этапы, критерии успеха и неизвестные |
+| `docs/RESEARCH_LOG.md` | Журнал наблюдений и гипотез |
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+Репозиторий: [k1gs/drakengard-recompile](https://gitlab.thebakerc.at/k1gs/drakengard-recompile), основная ветка `main`. `.gitignore` исключает локальные инструменты, рабочие данные и результаты сборки; `.gitattributes` задаёт окончания строк. GitLab CI запускает только переносимые тесты intake-парсера и требует доступный runner с поддержкой container images. Windows runtime, Ghidra и игра проверяются отдельно локально.
 
-***
+Не добавлять в публичный код образы, DLC, лицензии, ключи, дампы памяти или сгенерированный код игры. Проверять состав публикации отдельно: ignore не защищает уже отслеживаемые файлы.
 
-# Editing this README
+## Когда загрузка завершится
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+Сначала убедиться в завершении и проверке загрузки в самом клиенте. Затем выполнить разовый intake с новым именем отчёта:
 
-## Suggestions for a good README
+```powershell
+.\.venv\Scripts\python.exe scripts\inspect_input.py "ПУТЬ_К_ГОТОВОМУ_ОБРАЗУ_ИЛИ_КАТАЛОГУ" --download-complete --hash-all --out reports\intake-001.json
+```
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+Скрипт читает файлы, считает SHA-256 потоково, узнаёт ELF/SELF/PKG и разбирает PARAM.SFO. Он не распаковывает ISO: полный список файлов и metadata появятся после отдельного извлечения в `work/`. Скрипт отказывается перезаписывать отчёт и обнаруживает изменение размера/mtime во время чтения. Это не доказательство завершения скачивания и не проверка подлинности образа.
 
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Следующий необходимый вход — корректный plain ELF главного executable плюс дерево файлов игры. Для SELF используем документированный путь RPCS3 для собственных файлов. После получения ELF: определить machine/endian, TOC, OPD, импорты, библиотеки PRX/SPRX и встроенные SPU-модули; только затем начинать lifter. Команды и критерии ниже в плане.
