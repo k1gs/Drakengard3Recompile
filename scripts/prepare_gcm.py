@@ -7,8 +7,8 @@ def prepare(sdk, output):
     text=source.read_text(encoding='utf-8')
     anchor='void gcm_note_spu_put(u32 ea, u32 size)\n{'
     if text.count(anchor)!=1: raise ValueError('GCM DMA trace anchor changed')
-    text=text.replace(anchor,anchor+'\n    port_gpu_spu_write(ea,size);')
-    text='void port_gpu_spu_write(unsigned int,unsigned int);\n'+text
+    text=text.replace(anchor,anchor+'\n    port_gpu_spu_write(ea,size);\n    port_gcm_notify_write(ea,size);')
+    text='void port_gpu_spu_write(unsigned int,unsigned int);\nvoid port_gcm_notify_write(unsigned int,unsigned int);\nstatic volatile long s_port_park_ea;\n'+text
     if text.count('static u32 gcm_io2ea(u32 io)')!=1:
         raise ValueError('Pinned GCM IO mapping helper changed')
     start=text.index('static void gcm_fifo_resync_why(')
@@ -20,6 +20,7 @@ def prepare(sdk, output):
  * A write-head change does not authorize discarding a parked segment. */
 static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
 {
+    _InterlockedExchange(&s_port_park_ea,(long)gcm_io2ea(*getoff));
     static u32 last_get=0xFFFFFFFFu,last_put=0xFFFFFFFFu;
     static unsigned count;
     if ((*getoff!=last_get || put!=last_put) && count++<32) {
@@ -35,6 +36,20 @@ static void gcm_fifo_resync_why(const char* why, u32* getoff, u32 put)
     if text.count(old)!=1:
         raise ValueError('Pinned unmapped FIFO path changed')
     text=text.replace(old,'            why = "no-io-mapping";')
+    anchor='/* Serializes fence publication between the present ticker'
+    if text.count(anchor)!=1: raise ValueError('Pinned kick helper changed')
+    text=text.replace(anchor,'''/* Wake the existing FIFO owner after an actual producer write. This never
+ * executes GPU work on a producer thread or changes a guest fence/label. */
+void port_gcm_notify_write(u32 ea,u32 size) {
+    if(!size || !s_gcm_kick_ev) return;
+    /* Aligned 32-bit Windows load; a stale hint only delays a wake until the
+     * bounded timer fallback. Avoid a locked RMW on every guest store. */
+    u32 parked=(u32)s_port_park_ea;
+    if(ea==GCM_CONTROL_GUEST_ADDR ||
+       (parked && ea<=parked && (u64)ea+size>parked)) SetEvent(s_gcm_kick_ev);
+}
+
+'''+anchor)
     def include(m):
         p=source.parent/m[1]
         return '#include "'+p.resolve().as_posix()+'"' if p.is_file() else m[0]

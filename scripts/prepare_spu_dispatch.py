@@ -32,6 +32,18 @@ def prepare(sdk, output):
             old = '    ctx->status = SPU_STATUS_STOPPED_BY_HALT;\n}\n\n/* ===========================================================================\n * Execution trace'
             text = replace_once(text, old, old.replace('ctx->status = SPU_STATUS_STOPPED_BY_HALT;', 'port_spu_branch_missing(ctx);'))
         else:
+            text = replace_once(text, '        steps++;', r'''        steps++;
+        { static int profile=-1;static _Thread_local unsigned samples;
+          if(profile<0) profile=getenv("PORT_SPU_PROFILE")!=NULL;
+          if(profile && !(steps&65535u) && samples<16) {
+              fprintf(stderr,"[spu-perf] image=%d entry=%05X pc=%05X steps=%llu\n",ctx->image_id,start_lsa,ctx->pc,(unsigned long long)steps);
+              if(!samples) {
+                  char path[128];snprintf(path,sizeof(path),"interp-%p-image%d-entry%05X.bin",(void*)ctx,ctx->image_id,start_lsa);
+                  FILE* f=fopen(path,"wb");if(f){fwrite(ctx->ls,1,0x40000,f);fclose(f);}
+              }
+              samples++;
+          }
+        }''')
             old = 'ctx->pc = pc; ctx->stop_code = 0x1000; ctx->status = SPU_STATUS_STOPPED_BY_HALT; return 1;'
             text = replace_once(text, old, old.replace('return 1;', 'port_spu_branch_missing(ctx); return 1;'))
             old = '        ctx->pc = pc; ctx->status = SPU_STATUS_STOPPED_BY_HALT; return 1;'

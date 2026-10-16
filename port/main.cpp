@@ -55,6 +55,8 @@ extern "C" int port_check_spurs_events();
 extern "C" int port_check_vertex_constants();
 extern "C" int port_check_depth_state();
 extern "C" int port_check_vertex_cache();
+extern "C" int port_check_pipeline_cache();
+extern "C" int port_check_texture_units();
 extern "C" int port_check_fragment_constants();
 extern "C" int port_check_jobchain_resume();
 extern "C" int port_check_vpkswss();
@@ -115,6 +117,7 @@ void     cellGcmTickVBlank(void);
 void     cellGcmTickFlip(void);
 int      cellGcm_take_flip_pending(void);
 void     cellGcm_rsx_process_fifo(void);      /* drain get -> put */
+void     cellGcm_fifo_kick_wait(unsigned);
 unsigned cellGcm_flip_request_count(void);
 }
 
@@ -204,9 +207,17 @@ static DWORD WINAPI frame_clock(LPVOID)
 
     unsigned  last_flip = 0;
     ULONGLONG next_tick = GetTickCount64();
+    const bool profile=getenv("PORT_CLOCK_PROFILE")!=nullptr;
+    auto seconds=[]() { LARGE_INTEGER q,f;QueryPerformanceCounter(&q);QueryPerformanceFrequency(&f);return (double)q.QuadPart/f.QuadPart; };
+    double window=seconds(),idle=0,drain=0,present=0;
+    unsigned drains=0,presents=0;
+    auto walk=[&]() { double t=profile?seconds():0;cellGcm_rsx_process_fifo();if(profile) {drain+=seconds()-t;drains++;} };
+    auto show=[&](bool guest) { double t=profile?seconds():0;if(guest) present_guest_frame();else rsx_backend_present();if(profile) {present+=seconds()-t;presents++;} };
 
     for (;;) {
-        Sleep(4);
+        double wait_start=profile?seconds():0;
+        cellGcm_fifo_kick_wait(4);
+        if(profile) idle+=seconds()-wait_start;
         ULONGLONG now = GetTickCount64();
 
         int fired = 0;
@@ -219,13 +230,13 @@ static DWORD WINAPI frame_clock(LPVOID)
              * after the drain races the guest's next-frame writes and shows a
              * mixed one. */
             if (rsx_ok && cellGcm_take_flip_pending()) {
-                present_guest_frame();
+                show(true);
                 last_flip = cellGcm_flip_request_count();
             }
             /* Drain the FIFO every tick. This is what writes the RSX sync-fence
              * labels the game's per-frame logic blocks on, so it has to keep
              * advancing at 60 Hz even while present() throttles. */
-            if (rsx_ok) cellGcm_rsx_process_fifo();
+            if (rsx_ok) walk();
             next_tick += 16;             /* ~60 Hz */
             fired++;
         }
@@ -237,10 +248,10 @@ static DWORD WINAPI frame_clock(LPVOID)
          * The real RSX writes them in microseconds. */
         if (rsx_ok) {
             if (cellGcm_take_flip_pending()) {
-                present_guest_frame();
+                show(true);
                 last_flip = cellGcm_flip_request_count();
             }
-            cellGcm_rsx_process_fifo();
+            walk();
 
             if (rsx_backend_pump() != 0) {
                 rsx_ok = 0;              /* window closed */
@@ -251,11 +262,16 @@ static DWORD WINAPI frame_clock(LPVOID)
              * present freely, so the window is not blank during boot. */
             unsigned fc = cellGcm_flip_request_count();
             if (fc != last_flip) {
-                present_guest_frame();
+                show(true);
                 last_flip = fc;
             } else if (fc == 0) {
-                rsx_backend_present();
+                show(false);
             }
+        }
+        if(profile && seconds()-window>=3) {
+            double elapsed=seconds()-window;
+            fprintf(stderr,"[clock-perf] wall=%.3f idle=%.3f drain=%.3f/%u present=%.3f/%u other=%.3f\n",elapsed,idle,drain,drains,present,presents,elapsed-idle-drain-present);
+            window=seconds();idle=drain=present=0;drains=presents=0;
         }
     }
     return 0;
@@ -362,6 +378,8 @@ int main(int argc, char** argv)
     if (strcmp(argv[1], "--check-vertex-constants") == 0) return port_check_vertex_constants();
     if (strcmp(argv[1], "--check-depth-state") == 0) return port_check_depth_state();
     if (strcmp(argv[1], "--check-vertex-cache") == 0) return port_check_vertex_cache();
+    if (strcmp(argv[1], "--check-pipeline-cache") == 0) return port_check_pipeline_cache();
+    if (strcmp(argv[1], "--check-texture-units") == 0) return port_check_texture_units();
     if (strcmp(argv[1], "--check-fragment-constants") == 0) return port_check_fragment_constants();
     if (strcmp(argv[1], "--check-jobchain-resume") == 0) return port_check_jobchain_resume();
     if (strcmp(argv[1], "--check-vpkswss") == 0) return port_check_vpkswss();

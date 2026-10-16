@@ -109,7 +109,7 @@ endif()
 # ppu_recomp.h, so they can only be built against a particular lift.
 set(PS3RECOMP_SCAFFOLD
     "${CMAKE_CURRENT_BINARY_DIR}/ppu_loader_compat.cpp"
-    "${PS3RECOMP_DIR}/runtime/ppu/ppu_hle.cpp"
+    "${CMAKE_CURRENT_BINARY_DIR}/ppu_hle_compat.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/ppu_fs.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/ppu_sysprx.cpp"
 )

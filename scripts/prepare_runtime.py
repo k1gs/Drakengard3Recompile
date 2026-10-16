@@ -52,6 +52,12 @@ def main():
     if loader_text.count(anchor)!=1: raise ValueError('PPU 64-bit write trace anchor changed')
     loader_text=loader_text.replace(anchor,anchor+' port_gpu_ppu_write(a,(unsigned int)(v>>32),__builtin_return_address(0)); port_gpu_ppu_write(a+4,(unsigned int)v,__builtin_return_address(0));')
     loader_text='extern "C" void port_gpu_ppu_write(unsigned long long,unsigned int,void*);\n'+loader_text
+    anchor='    } while (0)\n'
+    # Notify only after the shared-memory write and coherence publication.
+    begin=loader_text.index('#define VM_WRITE_COH(')
+    end=loader_text.index(anchor,begin)
+    loader_text=loader_text[:end]+'        port_gcm_notify_write((uint32_t)(a),(uint32_t)(n)); \\\n'+loader_text[end:]
+    loader_text='extern "C" void port_gcm_notify_write(unsigned int,unsigned int);\n'+loader_text
     anchor='    if (ok) ppu_resv_break(ea);'
     if loader_text.count(anchor)!=1: raise ValueError('Resource atomic trace anchor changed')
     loader_text=loader_text.replace(anchor,anchor+'\n    if (ok) port_resource_atomic(ea,expected,val,self,__builtin_return_address(0));')
@@ -65,8 +71,23 @@ def main():
         return '#include "'+candidate.resolve().as_posix()+'"' if candidate.is_file() else match.group(0)
     loader_text=re.sub(r'#include "([^"]+)"',loader_include,loader_text)
     loader_out=a.out.parent/'ppu_loader_compat.cpp'
+    anchor='extern "C" void lv2_syscall(ppu_context* ctx)\n{'
+    if loader_text.count(anchor)!=1: raise ValueError('Syscall profile anchor changed')
+    loader_text=loader_text.replace(anchor,'#include "'+(Path(__file__).resolve().parent.parent/'port/hle_profile.h').as_posix()+'"\n'+anchor+'\n    PortHleProfile port_profile(0x80000000u|(unsigned)ctx->gpr[11],ctx);')
     if not loader_out.exists() or loader_out.read_text(encoding='utf-8')!=loader_text:
         loader_out.write_text(loader_text,encoding='utf-8')
+    hle_text=(a.sdk/'runtime/ppu/ppu_hle.cpp').read_text(encoding='utf-8')
+    anchor='extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)\n{'
+    if hle_text.count(anchor)!=1: raise ValueError('HLE profile anchor changed')
+    hle_text=hle_text.replace(anchor,anchor+'\n    PortHleProfile port_profile(nid,ctx);')
+    hle_text=hle_text.replace(anchor,'#include "'+(Path(__file__).resolve().parent.parent/'port/hle_profile.h').as_posix()+'"\n'+anchor)
+    def hle_include(match):
+        candidate=a.sdk/'runtime/ppu'/match.group(1)
+        return '#include "'+candidate.resolve().as_posix()+'"' if candidate.is_file() else match.group(0)
+    hle_text=re.sub(r'#include "([^"]+)"',hle_include,hle_text)
+    hle_out=a.out.parent/'ppu_hle_compat.cpp'
+    if not hle_out.exists() or hle_out.read_text(encoding='utf-8')!=hle_text:
+        hle_out.write_text(hle_text,encoding='utf-8')
     event_source=a.sdk/'runtime/syscalls/sys_event.c'
     event_text=event_source.read_text(encoding='utf-8')
     anchor='    uint64_t timeout_us  = LV2_ARG_U64(ctx, 2);'

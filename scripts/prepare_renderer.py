@@ -1,5 +1,6 @@
 """Build-local renderer fixes, capture diagnostics and CPU contract fixtures."""
 import re
+from prepare_texture_units import prepare as prepare_texture_units
 
 
 def prepare(sdk, output):
@@ -120,7 +121,7 @@ static int port_decompile_guest_fp(const u8* ucode,u32 bytes,int exp32,u32 cube_
     unsigned seq=++compile_seq;
     int trace=getenv("PORT_RENDER_TRACE") && seq<=128;
     ULONGLONG compile_started=GetTickCount64();
-    if(trace) fprintf(stderr,"[RENDER] FP compile begin seq=%u fp=%08X vs=%08X\n",seq,fp_addr,vs_hash);
+    if(trace) fprintf(stderr,"[RENDER] FP compile begin seq=%u fp=%08X vs=%08X code=%08X slot=%d gen=%u blend=%08X nrt=%d fmt=%u exp=%d mask=%X cull=%X cube=%X depth=%X\n",seq,fp_addr,vs_hash,uhash,vs_idx,s_d3d.vp_gen,blend,nrt,(unsigned)rtfmt,exp32,cmask,cull,cube_mask,depth_key);
     HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_fp", NULL, NULL,''')
     replace('    int n = port_decompile_guest_fp(vm_base + off, 4096, exp32, cube_mask, hlsl, sizeof(hlsl));',r'''    int n = port_decompile_guest_fp(vm_base + off, 4096, exp32, cube_mask, hlsl, sizeof(hlsl));
     const char* fp_capdir=getenv("RSX_CAP_DIR");
@@ -160,6 +161,95 @@ static u32 rsx_cull_key(''')
             '    guest_depth_state(&pd.DepthStencilState, depth_key);\n    pd.DepthStencilState.StencilEnable = FALSE;\n    /* DEPTH_OFF=1:')
     replace('s_d3d.vp_fp[s_d3d.vp_fp_n].cube_mask = cube_mask;',
             's_d3d.vp_fp[s_d3d.vp_fp_n].cube_mask = cube_mask;\n    s_d3d.vp_fp[s_d3d.vp_fp_n].depth_key = depth_key;')
+    # Guest FP addresses are transient upload locations, not shader identity.
+    # Keep address-dependent SDK diagnostics isolated if explicitly enabled.
+    key_helper=r'''
+static u32 port_fp_address_key(u32 address)
+{
+    static int addressed=-1;
+    if(addressed<0) addressed=getenv("FP_ONE") || getenv("FP_KILL") ||
+        getenv("FP_SHOW") || getenv("FP_IDCOLOR") || getenv("FP_TEX_FP");
+    return addressed ? address : 0;
+}
+
+static ID3D12PipelineState* port_find_fp_pso(const VPFPEntry* key)
+{
+    for(int i=0;i<s_d3d.vp_fp_n;i++) {
+        const VPFPEntry* q=&s_d3d.vp_fp[i];
+        if(q->fp_addr==key->fp_addr && q->vs_idx==key->vs_idx &&
+           q->vs_hash==key->vs_hash && q->gen==key->gen &&
+           q->blend==key->blend && q->nrt==key->nrt && q->rtfmt==key->rtfmt &&
+           q->exp32==key->exp32 && q->ucode_hash==key->ucode_hash &&
+           q->cmask==key->cmask && q->cull==key->cull &&
+           q->cube_mask==key->cube_mask && q->depth_key==key->depth_key) return q->pso;
+    }
+    return NULL;
+}
+
+int port_check_pipeline_cache(void)
+{
+    if(s_d3d.vp_fp_n) return 2;
+    VPFPEntry key={0};key.fp_addr=port_fp_address_key(0xB781);
+    key.vs_idx=19;key.vs_hash=0x32896AD6;key.gen=1;key.ucode_hash=0x9256A870;
+    key.nrt=1;key.rtfmt=10;key.exp32=1;key.cmask=15;key.cull=5;key.depth_key=15;
+    key.pso=(ID3D12PipelineState*)(uintptr_t)0x1234;
+    s_d3d.vp_fp[0]=key;s_d3d.vp_fp_n=1;
+    int ok=1;unsigned hits=0,misses=0;
+    for(unsigned i=0;i<600;i++) {
+        key.fp_addr=port_fp_address_key(0xB781+0x500*i);
+        if(port_find_fp_pso(&key)==key.pso) hits++;else ok=0;
+    }
+    /* Each compile-time state field must continue to distinguish pipelines. */
+#define CHECK_KEY_FIELD(field) do { key=s_d3d.vp_fp[0];key.field++; \
+    if(!port_find_fp_pso(&key)) misses++;else ok=0; } while(0)
+    CHECK_KEY_FIELD(vs_idx);CHECK_KEY_FIELD(vs_hash);CHECK_KEY_FIELD(gen);
+    CHECK_KEY_FIELD(blend);CHECK_KEY_FIELD(nrt);CHECK_KEY_FIELD(rtfmt);
+    CHECK_KEY_FIELD(exp32);CHECK_KEY_FIELD(ucode_hash);CHECK_KEY_FIELD(cmask);
+    CHECK_KEY_FIELD(cull);CHECK_KEY_FIELD(cube_mask);CHECK_KEY_FIELD(depth_key);
+#undef CHECK_KEY_FIELD
+    memset(&s_d3d.vp_fp[0],0,sizeof(VPFPEntry));s_d3d.vp_fp_n=0;
+    fprintf(stderr,"[compat-check] pipeline cache relocated hits=%u state misses=%u %s\n",hits,misses,ok?"PASS":"FAIL");
+    return ok?0:1;
+}
+
+'''
+    replace('static ID3D12PipelineState* vp_get_fp_pso(',key_helper+'static ID3D12PipelineState* vp_get_fp_pso(')
+    begin=text.index('    for (int i = 0; i < s_d3d.vp_fp_n; i++)',text.index('static ID3D12PipelineState* vp_get_fp_pso('))
+    end=text.index('    s_perf_pso_miss++;',begin)
+    original=text[begin:end]
+    if 'fp_addr != fp_addr' not in original or 'depth_key == depth_key' not in original:
+        raise ValueError('Pinned FP cache lookup changed')
+    text=text[:begin]+'''    VPFPEntry key={0};
+    key.fp_addr=port_fp_address_key(fp_addr);key.vs_idx=vs_idx;key.vs_hash=vs_hash;
+    key.gen=s_d3d.vp_gen;key.blend=blend;key.nrt=nrt;key.rtfmt=(u32)rtfmt;
+    key.exp32=exp32;key.ucode_hash=uhash;key.cmask=cmask;key.cull=cull;
+    key.cube_mask=cube_mask;key.depth_key=depth_key;
+    ID3D12PipelineState* cached=port_find_fp_pso(&key);
+    if(cached) return cached;
+'''+text[end:]
+    replace('s_d3d.vp_fp[s_d3d.vp_fp_n].fp_addr = fp_addr;',
+            's_d3d.vp_fp[s_d3d.vp_fp_n].fp_addr = port_fp_address_key(fp_addr);')
+    replace('''    if (FAILED(hr)) {
+        static int _e3=0;''',r'''    if (FAILED(hr)) {
+        /* Capture the actual PSO rejection, before unrelated frame messages
+         * exhaust the SDK's general debug-message budget. */
+        static unsigned rejected=0;
+        if(getenv("D3D12_DBG") && rejected++<16) {
+            ID3D12InfoQueue* iq=NULL;
+            if(SUCCEEDED(s_d3d.device->lpVtbl->QueryInterface(s_d3d.device,&IID_ID3D12InfoQueue,(void**)&iq)) && iq) {
+                UINT64 count=iq->lpVtbl->GetNumStoredMessages(iq);
+                for(UINT64 i=count>16?count-16:0;i<count;i++) {
+                    SIZE_T size=0;iq->lpVtbl->GetMessage(iq,i,NULL,&size);
+                    D3D12_MESSAGE* message=(D3D12_MESSAGE*)malloc(size);
+                    if(message && SUCCEEDED(iq->lpVtbl->GetMessage(iq,i,message,&size)) &&
+                       message->Severity<=D3D12_MESSAGE_SEVERITY_WARNING)
+                        fprintf(stderr,"[PSO-REJECT] fp=%08X vs=%08X id=%d %s\n",fp_addr,vs_hash,(int)message->ID,message->pDescription);
+                    free(message);
+                }
+                iq->lpVtbl->ClearStoredMessages(iq);iq->lpVtbl->Release(iq);
+            }
+        }
+        static int _e3=0;''')
     replace('dr_cube_mask(dr))','dr_cube_mask(dr), dr->depth_key)',2)
     replace('dr->cull = rsx_cull_key(s_d3d.current_rsx_state);',
             'dr->depth_key = rsx_depth_key(s_d3d.current_rsx_state);\n        dr->cull = rsx_cull_key(s_d3d.current_rsx_state);',3)
@@ -364,6 +454,7 @@ int port_check_vertex_constants(void)
         }
     }
     const u32 key_off = off;         /* lookup key: the offset as bound */''')
+    text=prepare_texture_units(text)
     def include(m):
         path=source.parent/m[1]
         return '#include "'+path.resolve().as_posix()+'"' if path.is_file() else m[0]
