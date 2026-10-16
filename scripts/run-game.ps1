@@ -28,6 +28,7 @@ $values = @{
 $previous = @{}
 $diagnostics = @{}
 if ($env:PORT_SPU_PROFILE) { $diagnostics.PORT_SPU_PROFILE=$env:PORT_SPU_PROFILE }
+if ($env:PORT_MSDSP_NATIVE) { $diagnostics.PORT_MSDSP_NATIVE=$env:PORT_MSDSP_NATIVE }
 foreach ($name in @('D3D12_DBG','D3D12_IQ','RSX_CAP_DIR','GCM_FIFO_KICK','PS3_POLLTOP','PORT_CLOCK_PROFILE','PS3_SCBLOCK_PROF','PORT_HLE_PROFILE','PORT_HLE_PROFILE_TID','PS3_SYNCLOG')) {
     $value = [Environment]::GetEnvironmentVariable($name, 'Process')
     if ($null -ne $value) { $diagnostics[$name]=$value }

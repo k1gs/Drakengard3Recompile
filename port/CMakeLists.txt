@@ -150,7 +150,7 @@ if(PORT_ENABLE_SPU)
         # loop that branches indirectly walks the thread stack off its guard
         # page a few thousand iterations in.
         list(APPEND SPU_SOURCES ${SPU_LIFTED}
-             "${PS3RECOMP_DIR}/runtime/spu/spu_dispatch_mt.c")
+             "${CMAKE_CURRENT_BINARY_DIR}/spu_dispatch_mt_compat.c")
         # Generated beside the lift; each is present only once its generator
         # has been run, so each is included only if it is actually here.
         foreach(gen IN ITEMS spu_workloads.c raw_jobs_register.c jobmods_register.c taskset_policy_bytes.c)
@@ -175,6 +175,7 @@ endif()
 
 add_executable(${PROJECT_NAME}
     main.cpp
+    msdsp_native.c
     diagnostics.cpp
     compat_checks.cpp
     ppu_vmx_checks.cpp
@@ -201,6 +202,13 @@ add_executable(${PROJECT_NAME}
     ${RECOMP_SOURCES}
     ${SPU_SOURCES}
 )
+set_source_files_properties(msdsp_native.c PROPERTIES
+    INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
+if(PORT_ENABLE_SPU AND EXISTS "${SPU_DIR}/msdsp_native/msdsp_bytes.h")
+    set_property(SOURCE msdsp_native.c APPEND PROPERTY
+        INCLUDE_DIRECTORIES "${SPU_DIR}/msdsp_native")
+    set_property(SOURCE msdsp_native.c APPEND PROPERTY COMPILE_DEFINITIONS PORT_WITH_MSDSP)
+endif()
 if(NOT SPU_SOURCES)
     set_source_files_properties(stubs.cpp PROPERTIES COMPILE_DEFINITIONS PORT_WITHOUT_SPU)
 endif()

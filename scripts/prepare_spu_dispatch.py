@@ -9,10 +9,18 @@ def replace_once(text, old, new):
 
 
 def prepare(sdk, output):
-    for name in ('spu_channels', 'spu_interp'):
+    for name in ('spu_channels', 'spu_interp', 'spu_dispatch_mt'):
         source = sdk / 'runtime/spu' / (name + '.c')
         text = source.read_text(encoding='utf-8')
         if name == 'spu_channels':
+            text = replace_once(text,
+                '    return (spu_lifted_fn)spu_lookup(lsa, ctx ? ctx->image_id : 0);',
+                '    spu_lifted_fn dsp=(spu_lifted_fn)port_msdsp_lookup(ctx,lsa);\n'
+                '    if(dsp) return dsp;\n'
+                '    return (spu_lifted_fn)spu_lookup(lsa, ctx ? ctx->image_id : 0);')
+            text = replace_once(text, '    spu_fn fn = NULL;\n    int code_owner = 0;',
+                '    spu_fn fn = port_msdsp_lookup(ctx,ctx->pc);\n'
+                '    if(fn) { fn(ctx); return; }\n    int code_owner = 0;')
             text = replace_once(text,
                 '            memcpy(mem, ls, MFC_ATOMIC_LINE);          /* commit local store */',
                 '            memcpy(mem, ls, MFC_ATOMIC_LINE);          /* commit local store */\n'
@@ -31,6 +39,11 @@ def prepare(sdk, output):
             text = replace_once(text, old, old.replace('spu_halt(ctx);', 'port_spu_branch_missing(ctx);'))
             old = '    ctx->status = SPU_STATUS_STOPPED_BY_HALT;\n}\n\n/* ===========================================================================\n * Execution trace'
             text = replace_once(text, old, old.replace('ctx->status = SPU_STATUS_STOPPED_BY_HALT;', 'port_spu_branch_missing(ctx);'))
+        elif name == 'spu_dispatch_mt':
+            text = replace_once(text, '    if (!special) {',
+                '    if (!special) {\n'
+                '        spu_dispatch_fn dsp=port_msdsp_lookup(ctx,pc);\n'
+                '        if(dsp) { ctx->pc=pc; __attribute__((musttail)) return dsp(ctx); }')
         else:
             text = replace_once(text, '        steps++;', r'''        steps++;
         { static int profile=-1;static _Thread_local unsigned samples;
@@ -52,7 +65,9 @@ def prepare(sdk, output):
             path = source.parent / match[1]
             return '#include "' + path.resolve().as_posix() + '"' if path.is_file() else match[0]
         text = re.sub(r'#include "([^"]+)"', include, text)
-        text = '#include "spu_context.h"\nvoid port_spu_branch_missing(spu_context*);\n' + text
+        text = ('#include "spu_context.h"\nvoid port_spu_branch_missing(spu_context*);\n'
+                'typedef void (*port_msdsp_fn)(spu_context*);\n'
+                'extern port_msdsp_fn port_msdsp_lookup(const spu_context*,uint32_t);\n' + text)
         target = output / (name + '_compat.c')
         if not target.exists() or target.read_text(encoding='utf-8') != text:
             target.write_text(text, encoding='utf-8')

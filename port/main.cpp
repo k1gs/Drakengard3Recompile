@@ -57,6 +57,8 @@ extern "C" int port_check_depth_state();
 extern "C" int port_check_vertex_cache();
 extern "C" int port_check_pipeline_cache();
 extern "C" int port_check_texture_units();
+extern "C" int port_check_msdsp();
+extern "C" void port_msdsp_register();
 extern "C" int port_check_fragment_constants();
 extern "C" int port_check_jobchain_resume();
 extern "C" int port_check_vpkswss();
@@ -380,6 +382,7 @@ int main(int argc, char** argv)
     if (strcmp(argv[1], "--check-vertex-cache") == 0) return port_check_vertex_cache();
     if (strcmp(argv[1], "--check-pipeline-cache") == 0) return port_check_pipeline_cache();
     if (strcmp(argv[1], "--check-texture-units") == 0) return port_check_texture_units();
+    if (strcmp(argv[1], "--check-msdsp") == 0) return port_check_msdsp();
     if (strcmp(argv[1], "--check-fragment-constants") == 0) return port_check_fragment_constants();
     if (strcmp(argv[1], "--check-jobchain-resume") == 0) return port_check_jobchain_resume();
     if (strcmp(argv[1], "--check-vpkswss") == 0) return port_check_vpkswss();
@@ -403,6 +406,7 @@ int main(int argc, char** argv)
     ppu_recomp_register();   /* lifted function table -> address map */
     drakengard_spu_register_all();
     drakengard_raw_jobs_register_all();
+    port_msdsp_register();
     ps3_load_prx_modules();  /* this game's lifted system PRX, if it has any */
     ppu_hle_init();          /* firmware import NID -> HLE handlers */
     ppu_sysprx_register();   /* boot-critical CRT */
