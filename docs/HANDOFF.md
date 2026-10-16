@@ -1,3 +1,31 @@
+## Первый настоящий кадр, 2026-10-16
+
+Готовый промпт/команды/ограничения для продолжения: `NEXT_CHAT_PROMPT.md`. Run075 завершён по300s лимиту; пользователь подтвердил картинку. Повторные checkpoint tests PASS (22 portable,14 native,HALTexit8). Следующая задача —~0.3FPS и меню.
+
+Читать `FIRST_NATIVE_IMAGE.md`: build088/run073 показал Unreal Engine intro, 1280x720. Это заставка; меню/gameplay ещё не подтверждены. Portable22/22 и14 native checks PASS. Run075 открыт в видимом окне через -Interactive. Все изменения локальные.
+
+## Предыдущее продолжение: JobChain resume, 2026-10-16
+
+Читать `JOBCHAIN_RESUME_PROGRESS.md`. Native append/branch и END/publication race теперь PASS, повторное исполнение job-prefix убрано сохранением PC, wake/retirement serialized. Run069 дошёл до HUD_TITLE_SF; bank72 требует большего b1. Build085:128 slots/stride2304 и native72slot PASS. Run070 остановлен на strict constant collector(-1); build086 добавляет failing-ucode dump/extended END diagnostic. Проверить фактические байты перед следующим исправлением. Меню/управление не подтверждены, skip park/fake labels/completions не добавлялись, всё локально.
+
+## Предыдущее продолжение: shader identity и FP constant buffer
+
+Читать `FRAGMENT_CONSTANTS_PROGRESS.md`, затем `VERTEX_BINDING_PROGRESS.md`. Build080 исправляет stable/pinned VP cache slots и buffered FP compiler/upload contract (точный b1 layout, реальные export width/cube mask). Native --check-vertex-cache до FAIL074/после PASS075; --check-fragment-constants до FAIL079/после PASS080. Run065 содержит geometry с recorded/bound hash1AE388AA; среди22974 vertices op020 имеет96 inside и72 потенциальных triangles. Значит чёрный кадр нельзя объяснять только clipping. Run066/NO_ALPHATEST остался чёрным. Повторные RunJobChain и variable FIFO park исследуются; scheduler semantics без доказательств не менялись. Всё локально, без commit/push, меню/управление пока не подтверждены.
+
+## Предыдущее продолжение: renderer state
+
+Checkpoint: build072, run061120s остановлен. В `work/native-runs/061/rsx-captures/frame_00` есть op020..023 CB/VB, VS hash784000D6. Ограниченный CPU evaluator показывает отрицательный w у12 образцов; проверить весь draw и происхождение camera/model matrices, не форсировать w. Меню нет; игровые процессы остановлены.
+
+Читать первым `RENDERER_STATE_PROGRESS.md`: build-local backend сохраняет исходные vertex constants вместо эвристической подмены projection и фиксирует depth state для каждого draw/PSO cache. --check-vertex-constants и --check-depth-state PASS; portable21/21 и восемь прежних native checks PASS, HALTexit8. Run058 (DEPTH_OFF) и059 (правильный depth) не дают scene/backbuffer image; только LUT256x16 ненулевая. Queue11 действительно получает port8 events. Следующий разбор — source VP и vertex attributes/clip coordinates, потом FP/RT chain. CaptureRsx теперь сохраняет HLSL и ucode VP; guest files/logs/captures остаются ignored. SDK напрямую не правился, commit/push не было, меню/управление не подтверждены.
+
+## Предыдущее продолжение: SPURS event corruption исправлена
+
+Читать первым `SPURS_EVENT_CORRUPTION.md`. SDK рассылал job index во все очереди; обработчик00BA69CC при index141 очищал resource slot01AC3218. Рассылка удалена в build-local copy, реальные SPU events сохранены и проверены отдельным --check-spurs-events (до FAIL, после PASS). Run054/build063120s: receiver41B48700/method00D570C0 для handle00100000, прежней NULL/OOM цепочки нет. Восемь native checks иportable21/21 PASS, HALTexit8. Кадры чёрные; следующий разборmainq11 timeout100000 LR008EFE08 и полезных renderer frames. Label4BD->513, GET/PUT растут; один отстающий label сам по себе не доказывает зависание. Всё локально, безcommit/push, все прогоны остановлены.
+
+## Новое продолжение: LFQueue push, 2026-10-15
+
+Читать первым `LFQUEUE_PUSH_PROGRESS.md`: наблюдаемый push реализован, настоящий image42 потребляет записи и пишет EventFlag01A54E80. Native test проверяет real guest reserve/DMA/complete, full queue и 31 wake с ring wrap. Run049/build058 доходит до прежнего NULL resource query: object46489300, resource40F89CD0, handle00100000, type1, table01AC3218, offset0, entry0=0. Следующее — producer/lifetime этой записи таблицы, не отсутствующий LF push. Кадры чёрные; меню/управление не подтверждены. Всё локально, commit/push не выполнялись, фоновых прогонов нет.
+
 # Передача работы — Drakengard 3, 2026-10-15
 
 Код текущего этапа зафиксирован коммитом `328e3e9`. Проверки перед публикацией: portable 21/21, шесть native checks PASS, interpreter HALT — ожидаемый exit 8. Следующий blocker — `_cellSpursLFQueuePushBody`; игрового кадра нет. Упоминания local/uncommitted ниже относятся к истории предыдущих прогонов.
@@ -90,3 +118,4 @@
 Собственные portable checks: 12/12 unit tests; native startup probe: 11/11 локальных проверок. Runtime: ранее 6/6 CTest и 1533 PPU conformance checks; это не end-to-end проверка игры. PowerShell syntax и `git diff --check` проходили.
 
 Origin: `https://gitlab.thebakerc.at/k1gs/drakengard-recompile.git`, main → origin/main; исходный коммит `429bf83`, первая инфраструктура опубликована как `3ea74f0`. Native harness, полный PPU/SPU build scaffold, новые скрипты/тесты и документация подготовлены к публикации по запросу пользователя. Рабочие файлы, инструменты, firmware, отчёты, образы, лицензии и сгенерированный код игры исключены через `.gitignore`. Перед последующими публикациями проверять фактический staged diff и состав файлов.
+Актуально2026-10-16: читать FIRST_NATIVE_IMAGE.md. Build088/run073 дал настоящий узнаваемый Unreal Engine intro frame002 (1280x720); меню/gameplay ещё не подтверждены. Portable22/22 и14 native checks PASS. Run074 exit1/250.98s требует выяснения причины; run075 запускается с видимым окном -Interactive. Все изменения локальные.

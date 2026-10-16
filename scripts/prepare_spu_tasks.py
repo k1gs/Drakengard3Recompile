@@ -1,5 +1,6 @@
 """Pin asynchronous task identity and arguments before starting a host worker."""
 import re
+from prepare_jobchains import prepare as prepare_jobchains
 
 
 def once(text, old, new):
@@ -31,6 +32,11 @@ def workload(text):
         uint8_t mask = (uint8_t)(0x80u >> (taskid & 7));
         if (!run) port_task_dispatch_blocker("taskset running table exhausted");
         if (run[taskid/8] & mask) { free(j); return 1; }
+        if (j->image_id == 42) {
+            uint32_t queue = ((uint32_t)j->taskinfo[0]<<24) | ((uint32_t)j->taskinfo[1]<<16)
+                           | ((uint32_t)j->taskinfo[2]<<8) | j->taskinfo[3];
+            port_lf_register_consumer(queue, taskset_ea, taskid);
+        }
         run[taskid/8] |= mask;
         vm_base[taskset_ea + 0x20 + taskid/8] &= (uint8_t)~mask;
         static unsigned trace_count;
@@ -65,6 +71,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t size, uint32_t ar
 }
 '''
     return ('#include <stdint.h>\n'
+        'void port_lf_register_consumer(uint32_t,uint32_t,uint32_t);\n'
         'void port_task_dispatch_blocker(const char*);\n'
         'int port_dispatch_task_locked(const uint8_t*,uint32_t,uint32_t,uint32_t,uint32_t);\n') + text
 
@@ -72,8 +79,46 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t size, uint32_t ar
 def prepare_spurs(sdk, output):
     source = sdk / 'libs/spurs/cellSpurs.c'
     text = source.read_text(encoding='utf-8')
+    # Job return is not an application user-event. The upstream broadcast of
+    # monotonically increasing job indices into every attached queue corrupts
+    # Drakengard's event-helper slot array (job 321 clears resource table slot 0).
+    # Real SPU send_event already routes through the bound port in lv2_register.
+    start=text.index('/* SPURS_EVENT_D3=<n>: probe.')
+    end=text.index('static void jc_execute(',start)
+    removed=text[start:end]
+    if removed.count('static void jc_signal_done(')!=1 or 's_spurs_event_queue[i]' not in removed:
+        raise ValueError('Pinned synthetic job-completion body changed')
+    text=text[:start]+text[end:]
+    text=once(text,'static void jc_execute(',
+        'void (*port_jc_end_hook)(u32,u32)=0; /* Isolated native regression seam. */\nstatic void jc_execute(')
+    for old in ('            jc_signal_done(jc_ea, idx);\n',
+                '                if (jobs) jc_signal_done(jc_ea, jobs - 1);\n',
+                '    jc_signal_done(s_jobchains[slot].jc_ea, -1);\n'):
+        text=once(text,old,'')
+    start=text.index('            /* Signal per JOB, not per lap.')
+    end=text.index('            pc += 8; continue;',start)
+    text=text[:start]+text[end:]
+    start=text.index('    /* Tell the application the chain is done.')
+    end=text.index('    return 0;',start)
+    text=text[:start]+text[end:]
     text = once(text, '    u32 free_slot = CELL_SPURS_MAX_TASK;',
         '    port_taskset_lock();\n    u32 free_slot = CELL_SPURS_MAX_TASK;')
+    text = once(text, '        s_jobchains[i].run_count++;',
+        '        s_jobchains[i].run_count++;\n'
+        '        if(getenv("PORT_JC_TRACE") && s_jobchains[i].run_count<=512)\n'
+        '            fprintf(stderr,"[JC] %s chain=%08X run=%d running=%ld entry=%08X cmd=%016llX\\n",\n'
+        '                who,(u32)jc_ea,s_jobchains[i].run_count,(long)s_jobchains[i].running,\n'
+        '                s_jobchains[i].entry_ea,(unsigned long long)vm_read64(s_jobchains[i].entry_ea));')
+    text = once(text, '    s_jobchains[slot].running = 0;',
+        '    if(getenv("PORT_JC_TRACE")) fprintf(stderr,"[JC] worker end chain=%08X runs=%d\\n",\n'
+        '        s_jobchains[slot].jc_ea,s_jobchains[slot].run_count);\n'
+        '    s_jobchains[slot].running = 0;')
+    text = once(text, '                printf("[cellSpurs] chain 0x%08X: END after %d job(s)\\n", jc_ea, jobs);',
+        '                if(getenv("PORT_JC_TRACE")) fprintf(stderr,"[JC] END chain=%08X pc=%08X jobs=%d reread=%016llX\\n",\n'
+        '                    jc_ea,pc,jobs,(unsigned long long)vm_read64(pc));\n'
+        '                if(port_jc_end_hook) port_jc_end_hook(jc_ea,pc);\n'
+        '                printf("[cellSpurs] chain 0x%08X: END after %d job(s)\\n", jc_ea, jobs);')
+    text=prepare_jobchains(text)
     text = once(text, '                    spu_workload_dispatch_async(host_elf, (uint32_t)sz,\n                                                (uint32_t)(uintptr_t)context);',
         '                    if (!port_dispatch_task_locked(host_elf, (uint32_t)sz,\n'
         '                                                (uint32_t)(uintptr_t)context, taskset_ea, i))\n'

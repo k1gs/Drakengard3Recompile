@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidateRange(5,300)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001', [switch]$CaptureFrames)
+param([ValidateRange(5,300)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001', [switch]$CaptureFrames, [switch]$CaptureRsx, [switch]$Interactive)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $exe = Join-Path $root 'build/game/DrakengardRecompile.exe'
@@ -27,7 +27,13 @@ $values = @{
 }
 $previous = @{}
 $diagnostics = @{}
-foreach ($name in @('SPU_INTERP_UNLIFTED','PS3_WAITBT','PS3_SPU_PCWATCH','SPU_DUMP_OVL','YDKJ_SPU_TRACE','SPU_CALLTRACE','PORT_EVENT_TRACE','PORT_PPU_SAMPLE','GCM_DRAINDBG','GCM_CTXDBG','GCM_RECDBG','PORT_GPU_WRITERS','PORT_ALLOC_TRACE')) {
+$renderTrace = [Environment]::GetEnvironmentVariable('PORT_RENDER_TRACE', 'Process')
+if ($null -ne $renderTrace) { $diagnostics.PORT_RENDER_TRACE=$renderTrace }
+$jobChainTrace = [Environment]::GetEnvironmentVariable('PORT_JC_TRACE', 'Process')
+if ($null -ne $jobChainTrace) { $diagnostics.PORT_JC_TRACE=$jobChainTrace }
+$alphaTrace = [Environment]::GetEnvironmentVariable('NO_ALPHATEST', 'Process')
+if ($null -ne $alphaTrace) { $diagnostics.NO_ALPHATEST=$alphaTrace }
+foreach ($name in @('SPU_INTERP_UNLIFTED','PS3_WAITBT','PS3_SPU_PCWATCH','SPU_DUMP_OVL','YDKJ_SPU_TRACE','SPU_CALLTRACE','PORT_EVENT_TRACE','PORT_PPU_SAMPLE','GCM_DRAINDBG','GCM_CTXDBG','GCM_RECDBG','PORT_GPU_WRITERS','PORT_ALLOC_TRACE','PORT_LF_TRACE','PORT_RESOURCE_TRACE','PPU_GUARD_EA','PPU_CASWATCH','VP_NOFIXPROJ','RSX_CAP_OFFSCREEN','DEPTH_OFF','CULL_OFF','CULL_FLIP')) {
     $value = [Environment]::GetEnvironmentVariable($name, 'Process')
     if ($null -ne $value) { $diagnostics[$name]=$value }
 }
@@ -38,6 +44,10 @@ if ($CaptureFrames) {
     $values.CELLMARK_DUMP_MINDRAWS='1'
     $values.CELLMARK_DUMP_DIR=$runDir
 }
+if ($CaptureRsx) {
+    $values.RSX_CAP='200:3:120'
+    $values.RSX_CAP_DIR=(Join-Path $runDir 'rsx-captures')
+}
 $exeHash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
 $process = $null
 $started = [DateTime]::UtcNow
@@ -46,7 +56,8 @@ try {
         $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         [Environment]::SetEnvironmentVariable($name, $values[$name], 'Process')
     }
-    $process = Start-Process -FilePath $exe -ArgumentList ('"'+$elf+'"') -WorkingDirectory $runDir -WindowStyle Hidden -PassThru -RedirectStandardOutput "$prefix.log" -RedirectStandardError "$prefix-errors.log"
+    $windowStyle = if ($Interactive) { 'Normal' } else { 'Hidden' }
+    $process = Start-Process -FilePath $exe -ArgumentList ('"'+$elf+'"') -WorkingDirectory $runDir -WindowStyle $windowStyle -PassThru -RedirectStandardOutput "$prefix.log" -RedirectStandardError "$prefix-errors.log"
     # Retain a process handle before exit; Windows PowerShell's Start-Process
     # object can otherwise lose ExitCode when the child finishes.
     $tracked = [System.Diagnostics.Process]::GetProcessById($process.Id)
@@ -56,6 +67,7 @@ try {
     @{
         started_utc=$started.ToString('o'); duration_seconds=([DateTime]::UtcNow-$started).TotalSeconds;
         pid=$process.Id; exit_code=$tracked.ExitCode; stopped_at_time_limit=$timedOut;
+        interactive_window=$Interactive.IsPresent;
         exe_sha256=$exeHash;
         elf_sha256=(Get-FileHash $elf -Algorithm SHA256).Hash.ToLowerInvariant();
         environment=$values; working_directory=$runDir;

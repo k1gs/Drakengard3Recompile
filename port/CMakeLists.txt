@@ -115,6 +115,10 @@ set(PS3RECOMP_SCAFFOLD
 )
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 execute_process(COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_ppu_vmx.py"
+    --lift "${RECOMP_DIR}"
+    COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_runtime.py"
     --sdk "${PS3RECOMP_DIR}" --out "${CMAKE_CURRENT_BINARY_DIR}/ppu_sysprx.cpp"
     COMMAND_ERROR_IS_FATAL ANY)
@@ -173,6 +177,7 @@ add_executable(${PROJECT_NAME}
     main.cpp
     diagnostics.cpp
     compat_checks.cpp
+    ppu_vmx_checks.cpp
     spu_dispatch_checks.cpp
     spu_task_checks.cpp
     gcm_checks.cpp
@@ -189,6 +194,7 @@ add_executable(${PROJECT_NAME}
     "${CMAKE_CURRENT_BINARY_DIR}/sys_event_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/cellSpurs_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/cellGcmSys_compat.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/rsx_d3d12_backend_compat.c"
     stubs.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
@@ -301,6 +307,7 @@ endif()
 #   - /bigobj on MSVC. A single lifted file routinely passes the 65,536-section
 #     limit of the default object format.
 if(MSVC)
+    set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/rsx_d3d12_backend_compat.c" PROPERTIES COMPILE_OPTIONS "/w;-O2;-fno-strict-aliasing;-ffp-contract=off")
     set_source_files_properties(${RECOMP_SOURCES} PROPERTIES
         COMPILE_OPTIONS "/w;/bigobj")
 else()

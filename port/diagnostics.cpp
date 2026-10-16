@@ -16,6 +16,14 @@ extern "C" uint32_t ppu_hle_inject_base;
 extern "C" uint32_t port_gcm_io_ea(uint32_t);
 extern "C" uint32_t ppu_prof_resolve_host(void*);
 extern "C" void ppu_dump_guest_stack(ppu_context*,const char*);
+extern "C" void port_resource_atomic(unsigned long long ea,unsigned int old,unsigned int val,void* opaque,void* caller)
+{
+    static const bool enabled=std::getenv("PORT_RESOURCE_TRACE")!=nullptr;
+    if(!enabled || ea!=0x01AC3218 || !old || val) return;
+    auto* ctx=static_cast<ppu_context*>(opaque);
+    fprintf(stderr,"[resource-atomic] ea=%08llX expected=%08X new=%08X fn=%08X\n",ea,old,val,ppu_prof_resolve_host(caller));
+    if(ctx) ppu_dump_guest_stack(ctx,"resource-atomic");
+}
 
 extern "C" void port_trace_allocation_call(void* opaque,void* caller)
 {
@@ -23,6 +31,25 @@ extern "C" void port_trace_allocation_call(void* opaque,void* caller)
     if(!enabled) return;
     auto* ctx=static_cast<ppu_context*>(opaque);
     uint32_t target=(uint32_t)ctx->ctr;
+    if(ctx->lr==0x00CB5BA0) {
+        static std::atomic<unsigned> queries{0};
+        if(queries.fetch_add(1)<4) {
+            uint32_t object=(uint32_t)ctx->gpr[22];
+            if(object>=0x10000 && object<=0xFFFFFC00u) {
+                uint32_t resource=vm_read32(object+0x3B8);
+                if(resource>=0x10000 && resource<=0xFFFFFF00u) {
+                    uint32_t handle=vm_read32(resource+0xBC);
+                    uint32_t table=vm_read32(0x01981090-0x3F7C);
+                    uint32_t offset=(handle<<2)&0x003FFFFCu;
+                    fprintf(stderr,"[resource-query] receiver=%08llX method=%08X object=%08X resource=%08X handle=%08X type=%u table=%08X offset=%08X entry=%08X tid=%llu\n",
+                        (unsigned long long)ctx->gpr[3],target,
+                        object,resource,handle,(handle>>20)&63,table,offset,
+                        table>=0x10000 && (uint64_t)table+offset<=0xFFFFFFFCull?vm_read32(table+offset):0,
+                        (unsigned long long)ctx->thread_id);
+                }
+            }
+        }
+    }
     // Known allocator entries from the failing native saved stack.
     if(target!=0x0141A210 && target!=0x00E062F0 && target!=0x012EFED8) return;
     static std::atomic<unsigned> records{0};

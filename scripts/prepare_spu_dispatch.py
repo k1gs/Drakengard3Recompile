@@ -13,6 +13,11 @@ def prepare(sdk, output):
         source = sdk / 'runtime/spu' / (name + '.c')
         text = source.read_text(encoding='utf-8')
         if name == 'spu_channels':
+            text = replace_once(text,
+                '            memcpy(mem, ls, MFC_ATOMIC_LINE);          /* commit local store */',
+                '            memcpy(mem, ls, MFC_ATOMIC_LINE);          /* commit local store */\n'
+                '            port_lf_atomic_trace(ctx, ea, ls);')
+            text = 'void port_lf_atomic_trace(spu_context*,uint32_t,const uint8_t*);\n' + text
             text = replace_once(text, 'void spu_halt(spu_context* ctx)\n{',
                 'void spu_halt(spu_context* ctx)\n{\n'
                 '    if (ctx->status == SPU_STATUS_STOPPED_BY_HALT) port_spu_branch_missing(ctx);')

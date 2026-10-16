@@ -1,3 +1,9 @@
+Latest continuation: `SPURS_EVENT_CORRUPTION.md` confirms and fixes resource-table corruption from synthetic SDK job events. Previous NULL-resource blocker below is historical. Menu remains unvalidated.
+
+## Superseded: LFQueue push implemented locally
+
+Read `LFQUEUE_PUSH_PROGRESS.md` first. Observed PPU publication and real image-42 consumption/EventFlag completion now work; NULL resource lookup and black frames remain. The missing-push barrier below describes the previous build.
+
 # LF queue blocker and large-allocation diagnosis вЂ” 2026-10-15
 
 Publication checkpoint 2026-10-15: runtime changes are committed as `328e3e9`. Local/uncommitted status statements below describe the original capture time. Current blocker and visual limitations are recorded in `LFQUEUE_PROGRESS.md`.

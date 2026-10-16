@@ -8,6 +8,7 @@ from prepare_spu_dispatch import prepare as prepare_spu_dispatch
 from prepare_spu_tasks import workload as prepare_tasks, prepare_spurs
 from prepare_gcm import prepare as prepare_gcm
 from prepare_memory import prepare as prepare_memory
+from prepare_renderer import prepare as prepare_renderer
 
 
 def patch_sysprx(text):
@@ -36,6 +37,7 @@ def main():
     prepare_spu_dispatch(a.sdk, a.out.parent)
     prepare_spurs(a.sdk, a.out.parent)
     prepare_gcm(a.sdk, a.out.parent)
+    prepare_renderer(a.sdk, a.out.parent)
     loader=a.sdk/'runtime/ppu/ppu_loader.cpp'
     loader_text=loader.read_text(encoding='utf-8')
     anchor='        ppu_context* c = g_resv_ctxs[i];\n        if (!c) continue;\n        fprintf(stderr, "[WATCHDOG]'
@@ -50,6 +52,10 @@ def main():
     if loader_text.count(anchor)!=1: raise ValueError('PPU 64-bit write trace anchor changed')
     loader_text=loader_text.replace(anchor,anchor+' port_gpu_ppu_write(a,(unsigned int)(v>>32),__builtin_return_address(0)); port_gpu_ppu_write(a+4,(unsigned int)v,__builtin_return_address(0));')
     loader_text='extern "C" void port_gpu_ppu_write(unsigned long long,unsigned int,void*);\n'+loader_text
+    anchor='    if (ok) ppu_resv_break(ea);'
+    if loader_text.count(anchor)!=1: raise ValueError('Resource atomic trace anchor changed')
+    loader_text=loader_text.replace(anchor,anchor+'\n    if (ok) port_resource_atomic(ea,expected,val,self,__builtin_return_address(0));')
+    loader_text='extern "C" void port_resource_atomic(unsigned long long,unsigned int,unsigned int,void*,void*);\n'+loader_text
     anchor='extern "C" void ps3_indirect_call(ppu_context* ctx)\n{'
     if loader_text.count(anchor)!=1: raise ValueError('Indirect allocation trace anchor changed')
     loader_text=loader_text.replace(anchor,anchor+'\n    port_trace_allocation_call(ctx,__builtin_return_address(0));')

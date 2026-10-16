@@ -1,3 +1,31 @@
+## Актуальный этап: первый настоящий кадр, 2026-10-16
+
+Передача в новый чат: `docs/NEXT_CHAT_PROMPT.md`. Пользователь подтвердил живую заставку run075; прогон завершён по300s лимиту. Portable22/22 и14 native checks повторно PASS перед checkpoint, HALTexit8. Следующее — диагностировать~0.3FPS и дойти до меню, причина низкой производительности пока неизвестна.
+
+Build088/run073 впервые дал узнаваемую заставку Unreal Engine в native GPU readback: `work/native-runs/073/frame_002.bmp`, 1280x720. Это intro, меню и gameplay пока не подтверждены. Подробности — `docs/FIRST_NATIVE_IMAGE.md`. Исправлены FP decode window (реальная программа4816 bytes) и PPU vpkswss; portable22/22, четырнадцать native checks PASS, HALT exit8. Runner поддерживает видимое окно через -Interactive. Всё локально, без commit/push.
+
+## Предыдущий этап: JobChain resume и HUD constants, 2026-10-16
+
+Читать `docs/JOBCHAIN_RESUME_PROGRESS.md`. Append stream теперь сохраняет PC на END, не исполняет старый префикс повторно и не теряет сигнал при retirement. Native до4/3/2/1 и1/0 FAIL, после1/1/1/1 и1/1 PASS. Run069 дошёл до HUD_TITLE_SF и реального FP bank72>64; build085 даёт128 slots/stride2304, fixture72 PASS. Run070 остановлен на strict collector count=-1; диагностируется boundary/publishing/branch decoding, байты не подменяются. Изображение и меню пока не подтверждены. Всё локально, без commit/push.
+
+## Предыдущий этап: shader bindings и fragment constants, 2026-10-15
+
+Читать `docs/FRAGMENT_CONSTANTS_PROGRESS.md` и `docs/VERTEX_BINDING_PROGRESS.md`. Исправлены сдвиг VP cache slots под pending draws и несовместимость code-only FP hash с literal constants в HLSL. Native regressions до FAIL/после PASS; buffered FP source теперь читает per-draw constants и учитывает export control. Run065: correct recorded/bound VP hash, 22974 vertices проверены, op020 имеет96 inside/72 потенциально видимых triangles — полное clipping не объясняет чёрный кадр. NO_ALPHATEST/run066 изображения не дал. Scheduler/FIFO park остаётся переменным между прогонами; фиктивные labels/jobs не добавлялись. Build080 — текущая реализация, всё локально без commit/push.
+
+## Предыдущий этап: renderer state, 2026-10-15
+
+Checkpoint: build072, run061120s завершён, процессы остановлены. Новые fixtures PASS; backbuffer чёрный. Захваченные inputs op020..023 дают finite, но clipped coordinates в ограниченном CPU evaluator; это следующий участок проверки, не доказанная ошибка shader ISA.
+
+Читать `docs/RENDERER_STATE_PROGRESS.md`. Убрана подмена валидных vertex constants (c00=-0.831469); per-draw depth enable/write/function теперь сохраняются и входят в ключ guest-FP PSO. Native fixtures: точный constant upload PASS для трёх значений, depth32/32 PASS. Build069: portable21/21 и восемь прежних native checks PASS, HALTexit8. Контрольный058 с DEPTH_OFF и059 с правильным depth остаются чёрными; ненулевая только LUT256x16, это не игровой кадр. Queue11 получает настоящие события port8, WAIT не доказывает зависание. CaptureRsx сохраняет geometry batches и исходные HLSL/ucode VP для следующего разбора clip coordinates/attributes. SDK не изменён, используется build-local backend. Меню/управление пока не подтверждены; всё локально без commit/push.
+
+## Предыдущий этап: устранена порча resource table, 2026-10-15
+
+Читать `docs/SPURS_EVENT_CORRUPTION.md`. Найдена и удалена синтетическая рассылка SDK job completion во все SPURS queues: индекс job321 приводил к atomic-очистке slot0 resource table. Настоящие SPU user events по связанному порту сохранены. Regression до FAIL / после PASS, восемь native checks PASS, portable21/21, HALTexit8. Run054/build063: handle00100000 реально получает receiver41B48700 и method00D570C0; прежних NULL/resource stack-size failures нет за120s. Меню пока нет, два readbacks нулевые. Rendering label/FIFO продвигаются; main tid1 ждётq11/LR008EFE08. Изменения локальные, без commit/push, все процессы остановлены.
+
+## Актуальное продолжение: LFQueue push, 2026-10-15
+
+Реализован наблюдаемый mode-3 ANY2ANY push под общим lock-line, связь очереди с enqueue-time consumer и доставка настоящего task signal. Image 42 реально потребляет записи и сам пишет completion EventFlag 01A54E80. Новый --check-lfqueue: 65 записей/wrap, full/blocking producer, 31 blocking wake/ring wrap — PASS; portable 21/21, прежние шесть native checks PASS, HALT exit8. Меню/управление не получены: кадры нулевые. Run049/build058: NULL lookup при handle00100000, type1, table01AC3218, entry0=0; большой stack-derived allocation остаётся. Подробнее docs/LFQUEUE_PUSH_PROGRESS.md. Изменения локальные, без commit/push; все прогоны остановлены. Старые LF push blocker/exit6 ниже — история.
+
 # Состояние на 2026-10-15
 
 Код текущего этапа зафиксирован коммитом `328e3e9`. Проверки перед публикацией: portable 21/21, шесть native checks PASS, interpreter HALT — ожидаемый exit 8. Следующий blocker — `_cellSpursLFQueuePushBody`; игрового кадра нет. Упоминания local/uncommitted ниже относятся к истории предыдущих прогонов.

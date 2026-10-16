@@ -6,6 +6,7 @@
 #include <mutex>
 #include <cstring>
 #include "win32_compat.h"
+#include "spu_context.h"
 extern "C" uint32_t vm_read32(uint64_t);
 extern "C" void vm_write32(uint64_t,uint32_t);
 extern "C" void ps3_hle_register_ctx(uint32_t,const char*,void (*)(ppu_context*));
@@ -16,6 +17,36 @@ extern "C" uint8_t* vm_base;
 extern "C" [[noreturn]] void port_compatibility_blocker(const char*);
 static std::mutex trace_lock;
 static std::map<uint32_t,unsigned> calls;
+struct LFConsumer { uint32_t taskset, task; };
+static std::map<uint32_t,LFConsumer> lf_consumers;
+static uint16_t lf_read16(uint32_t ea) { return (uint16_t)((vm_base[ea]<<8)|vm_base[ea+1]); }
+static void lf_write16(uint32_t ea,uint16_t v) { vm_base[ea]=(uint8_t)(v>>8); vm_base[ea+1]=(uint8_t)v; }
+// The SDK currently assigns workload 0 to every taskset. Bind the observed
+// image-42 service to its enqueue-time queue argument, never the global last
+// taskset. A notification names a waiter from the guest LF ring.
+extern "C" void port_lf_register_consumer(uint32_t q,uint32_t taskset,uint32_t task)
+{
+    std::lock_guard<std::mutex> lock(trace_lock);
+    auto it=lf_consumers.find(q);
+    if(it!=lf_consumers.end() && (it->second.taskset!=taskset || it->second.task!=task))
+        port_compatibility_blocker("LFQueue: ambiguous consumer identity");
+    lf_consumers[q]={taskset,task};
+}
+extern "C" void spu_taskset_signal_task(uint32_t,uint32_t);
+extern "C" void port_lf_atomic_trace(spu_context* ctx,uint32_t ea,const uint8_t* line)
+{
+    static const bool enabled=std::getenv("PORT_LF_TRACE")!=nullptr;
+    if(!enabled || ctx->image_id!=42) return;
+    std::lock_guard<std::mutex> lock(trace_lock);
+    static unsigned records=0;
+    if(records++>=128) return;
+    fprintf(stderr,"[lf-spu-commit] ea=%08X lr=%05X words:",ea,ctx->gpr[0]._u32[0]);
+    for(unsigned k=0;k<8;k++) {
+        auto* p=line+4*k;
+        fprintf(stderr," %08X",((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3]);
+    }
+    fprintf(stderr,"\n");
+}
 static void result(ppu_context* ctx,uint32_t value) { ctx->gpr[3]=(uint64_t)(int64_t)(int32_t)value; }
 static void pop_body(ppu_context* ctx)
 {
@@ -75,23 +106,77 @@ static void pop_body(ppu_context* ctx)
 }
 static void lf_push_body(ppu_context* ctx)
 {
-    // This caller logs an error and continues. Stop here so the missing queue
-    // publication cannot be buried under a later resource/allocator failure.
-    uint64_t q=ctx->gpr[3],input=ctx->gpr[4];
-    fprintf(stderr,"[lfqueue-blocker] push q=%08llX input=%08llX mode=%llu lr=%08llX tid=%llu\n",
-        (unsigned long long)q,(unsigned long long)input,(unsigned long long)ctx->gpr[5],
-        (unsigned long long)ctx->lr,(unsigned long long)ctx->thread_id);
-    if(q>=0x10000 && q<=0xFFFFFF80ull) {
-        fprintf(stderr,"[lfqueue-blocker] queue:");
-        for(unsigned i=0;i<32;i++) fprintf(stderr," %08X",vm_read32(q+4*i));
-        fprintf(stderr,"\n");
+    uint64_t q64=ctx->gpr[3],input64=ctx->gpr[4];
+    if(!q64 || !input64) { result(ctx,0x80410911); return; }
+    if(q64>0xFFFFFF80ull || input64>0xFFFFFFFFull) { result(ctx,0x80410902); return; }
+    uint32_t q=(uint32_t)q64,input=(uint32_t)input64;
+    if((q&127) || (input&15)) { result(ctx,0x80410910); return; }
+    if(ctx->gpr[5]!=3) port_compatibility_blocker("LFQueuePushBody: only observed mode 3 supported");
+    unsigned n;
+    { std::lock_guard<std::mutex> lock(trace_lock); n=++calls[q]; }
+    auto started=GetTickCount64(),logged=started;
+    for(;;) {
+        spu_lockline_lock();
+        uint32_t size=vm_read32(q+0x10),depth=vm_read32(q+0x14);
+        uint64_t tagged=((uint64_t)vm_read32(q+0x18)<<32)|vm_read32(q+0x1C);
+        uint64_t buffer=tagged&~1ull;
+        if(!size || size>0x4000 || (size&15) || !depth || depth>0x7FFF ||
+           !(tagged&1) || !buffer || buffer+(uint64_t)size*depth>0x100000000ull ||
+           input64+size>0x100000000ull) {
+            spu_lockline_unlock(); result(ctx,0x80410902); return;
+        }
+        if(vm_read32(q+0x24)!=3) {
+            spu_lockline_unlock(); port_compatibility_blocker("LFQueuePushBody: non-ANY2ANY queue");
+        }
+        uint32_t pop=lf_read16(q),push=lf_read16(q+8),reserved=lf_read16(q+14),mod=depth*2;
+        if(pop>=mod || push>=mod || reserved>=mod) {
+            spu_lockline_unlock(); result(ctx,0x8041090F); return;
+        }
+        // One lock covers reservation, payload and publication. There can be
+        // concurrent PPU producers, but a split-phase SPU producer is not yet
+        // supported: never discard its reservation/completion bitmap.
+        if(reserved!=push || lf_read16(q+10)) {
+            spu_lockline_unlock(); port_compatibility_blocker("LFQueuePushBody: outstanding split-phase producer");
+        }
+        uint32_t used=(push+mod-pop)%mod;
+        if(used>depth) { spu_lockline_unlock(); result(ctx,0x8041090F); return; }
+        if(used<depth) {
+            uint16_t control=lf_read16(q+4);
+            unsigned queued=control&31,issued=(control>>10)&31,ack=(control>>5)&31;
+            if(queued>=30 || issued>=30 || ack>=30) {
+                spu_lockline_unlock(); result(ctx,0x8041090F); return;
+            }
+            unsigned pending=(queued+30-issued)%30;
+            LFConsumer consumer{};
+            // Signal at most one registered waiter for this newly published
+            // entry. Ring indices wrap at 30; its 15 token slots are reused.
+            if(pending) {
+                uint16_t token=lf_read16(q+0x32+2*(issued%15));
+                { std::lock_guard<std::mutex> lock(trace_lock);
+                  auto it=lf_consumers.find(q); if(it!=lf_consumers.end()) consumer=it->second; }
+                if(pending!=1 || !consumer.taskset || token!=consumer.task) {
+                    spu_lockline_unlock(); port_compatibility_blocker("LFQueuePushBody: unsupported waiter token/owner");
+                }
+            }
+            uint32_t slot=push%depth,next=(push+1)%mod;
+            lf_write16(q+14,(uint16_t)next);
+            memmove(vm_base+(uint32_t)buffer+(size_t)slot*size,vm_base+input,size);
+            for(uint64_t line=(buffer+(uint64_t)slot*size)&~127ull;
+                line<buffer+(uint64_t)(slot+1)*size;line+=128) spu_coh_notify_write((uint32_t)line);
+            lf_write16(q+8,(uint16_t)next);
+            if(pending) lf_write16(q+4,(uint16_t)((control&~0x7C00u)|(((issued+1)%30)<<10)));
+            spu_coh_notify_write(q);
+            spu_lockline_unlock();
+            if(pending) spu_taskset_signal_task(consumer.taskset,consumer.task);
+            if(n<=8) fprintf(stderr,"[lfqueue] published q=%08X slot=%u push=%u->%u pop=%u bytes=%u waiter=%u taskset=%08X\n",
+                q,slot,push,next,pop,size,pending?1u:0u,consumer.taskset);
+            result(ctx,0); return;
+        }
+        spu_lockline_unlock();
+        auto now=GetTickCount64();
+        if(now-logged>=5000) { fprintf(stderr,"[lfqueue] full q=%08X elapsed_ms=%llu\n",q,(unsigned long long)(now-started)); logged=now; }
+        Sleep(1);
     }
-    if(input>=0x10000 && input<=0xFFFFFFE0ull) {
-        fprintf(stderr,"[lfqueue-blocker] input32:");
-        for(unsigned i=0;i<8;i++) fprintf(stderr," %08X",vm_read32(input+4*i));
-        fprintf(stderr,"\n");
-    }
-    port_compatibility_blocker("_cellSpursLFQueuePushBody: guest LF queue publication protocol not implemented");
 }
 static void lf_initialize(ppu_context* ctx)
 {
