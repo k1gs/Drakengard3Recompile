@@ -24,21 +24,6 @@ Screenshots from the experimental native Windows build. Intro frames are already
 
 The scene capture shows the current dark image and subtitle artifacts, with approximately 0.33 FPS reported in the window title at the time of capture.
 
-## Research and implementation notes
-
-These documents record earlier milestones and investigations. Their historical blocker descriptions may have been superseded by later work.
-
-- [Initial analysis](docs/FIRST_ANALYSIS.md): findings, hashes, and limitations of the supplied release.
-- [Native resource boot](docs/RESOURCE_API_PROGRESS.md): PPU/SPU lifts, EDAT APIs, OVIS ABI, allocation tables, and cooked package loading.
-- [SPURS queues](docs/SPURS_QUEUE_PROGRESS.md): real PPU/SPU queue records, image ID isolation, FIFO ordering, wraparound, and blocking producers.
-- [SPU overlays](docs/SPU_OVERLAY_PROGRESS.md): interpreter fallback returns and audio EventFlag wakeups.
-- [SPURS task identity](docs/SPURS_TASK_IDENTITY.md): task ownership, argument snapshots, and duplicate claims.
-- [GPU FIFO](docs/GPU_FIFO_PROGRESS.md): preserving commands while a producer-owned FIFO segment is parked.
-- [Memory reuse](docs/MEMORY_REUSE_PROGRESS.md): reuse of released kernel pages and native regression checks.
-- [LFQueue initialization](docs/LFQUEUE_PROGRESS.md) and [LFQueue publication](docs/LFQUEUE_PUSH_PROGRESS.md): ANY2ANY initialization, real task publication, and SPU consumption.
-- [First native image](docs/FIRST_NATIVE_IMAGE.md): the first verified native intro frame.
-- [Handoff](docs/HANDOFF.md): development context and historical checkpoints.
-
 ## Quick start
 
 Run from PowerShell in the project root:
@@ -77,12 +62,11 @@ Building the game executable also requires the locally generated PPU and SPU sou
 | `third_party/` | External tool source snapshots and their licenses |
 | `tools/` | Portable tools, archives, and Gradle cache |
 | `build/` | Local build output |
-| `docs/PORTING_PLAN.md` | Milestones, success criteria, and open questions |
-| `docs/RESEARCH_LOG.md` | Observations and hypotheses |
+| `docs/` | Local research notes and handoffs (not tracked in Git) |
 
 The primary repository is [k1gs/Drakengard3Recompile](https://github.com/k1gs/Drakengard3Recompile), on branch `main`. The original [GitLab repository](https://gitlab.thebakerc.at/k1gs/drakengard-recompile) is retained as a separate remote.
 
-`.gitignore` excludes local tools, working data, generated game code, crash dumps, and build output. `.gitattributes` defines line endings. The existing GitLab CI configuration runs portable intake/parser tests and requires a runner with container image support. The Windows runtime, Ghidra, and game are checked separately on the local machine.
+`.gitignore` excludes local research notes, `CURRENT_STATE.md`, local tools, working data, generated game code, crash dumps, and build output. `.gitattributes` defines line endings. The existing GitLab CI configuration runs portable intake/parser tests and requires a runner with container image support. The Windows runtime, Ghidra, and game are checked separately on the local machine.
 
 Do not publish game images, DLC, licenses, keys, memory dumps, or generated game code. Review the files being published explicitly: ignore rules do not protect files already tracked by Git.
 
@@ -96,4 +80,4 @@ First confirm that the download has completed and been verified in the download 
 
 The script reads files, computes streaming SHA-256 hashes, identifies ELF/SELF/PKG files, and parses PARAM.SFO. It does not extract ISO images; a full file listing and metadata require a separate extraction into `work/`. It refuses to overwrite a report and detects size or modification-time changes while reading. Its output does not prove download completion or image authenticity.
 
-Recompilation requires a valid plain ELF of the main executable and the game's file tree. For user-owned SELF files, use RPCS3's documented extraction/decryption workflow. Before lifting, inspect the executable's architecture, endianness, TOC, OPD, imports, PRX/SPRX libraries, and embedded SPU modules. See the research notes and porting plan for the project's existing analysis.
+Recompilation requires a valid plain ELF of the main executable and the game's file tree. For user-owned SELF files, use RPCS3's documented extraction/decryption workflow. Before lifting, inspect the executable's architecture, endianness, TOC, OPD, imports, PRX/SPRX libraries, and embedded SPU modules.
