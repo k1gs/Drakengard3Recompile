@@ -20,7 +20,7 @@ Screenshots from the experimental native Windows build. Intro frames are already
 
 ### Intro scene
 
-![Intro scene displayed by the native Windows build, with visible rendering issues](assets/screenshots/native-intro-scene.png)
+![Intro scene displayed by the native Windows build, with visible rendering issues](assets/screenshots/native-intro-scene-cropped.png)
 
 The scene capture shows the current dark image and subtitle artifacts, with approximately 0.33 FPS reported in the window title at the time of capture.
 
