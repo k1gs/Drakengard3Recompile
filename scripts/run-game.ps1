@@ -29,17 +29,19 @@ $previous = @{}
 $diagnostics = @{}
 if ($env:PORT_SPU_PROFILE) { $diagnostics.PORT_SPU_PROFILE=$env:PORT_SPU_PROFILE }
 if ($env:PORT_MSDSP_NATIVE) { $diagnostics.PORT_MSDSP_NATIVE=$env:PORT_MSDSP_NATIVE }
-foreach ($name in @('D3D12_DBG','D3D12_IQ','RSX_CAP_DIR','GCM_FIFO_KICK','PS3_POLLTOP','PORT_CLOCK_PROFILE','PS3_SCBLOCK_PROF','PORT_HLE_PROFILE','PORT_HLE_PROFILE_TID','PS3_SYNCLOG')) {
-    $value = [Environment]::GetEnvironmentVariable($name, 'Process')
-    if ($null -ne $value) { $diagnostics[$name]=$value }
-}
-$renderTrace = [Environment]::GetEnvironmentVariable('PORT_RENDER_TRACE', 'Process')
-if ($null -ne $renderTrace) { $diagnostics.PORT_RENDER_TRACE=$renderTrace }
-$jobChainTrace = [Environment]::GetEnvironmentVariable('PORT_JC_TRACE', 'Process')
-if ($null -ne $jobChainTrace) { $diagnostics.PORT_JC_TRACE=$jobChainTrace }
-$alphaTrace = [Environment]::GetEnvironmentVariable('NO_ALPHATEST', 'Process')
-if ($null -ne $alphaTrace) { $diagnostics.NO_ALPHATEST=$alphaTrace }
-foreach ($name in @('PERF','PSOMISSDBG','HASHDBG','SPU_INTERP_UNLIFTED','PS3_WAITBT','PS3_SPU_PCWATCH','SPU_DUMP_OVL','YDKJ_SPU_TRACE','SPU_CALLTRACE','PORT_EVENT_TRACE','PORT_PPU_SAMPLE','GCM_DRAINDBG','GCM_CTXDBG','GCM_RECDBG','PORT_GPU_WRITERS','PORT_ALLOC_TRACE','PORT_LF_TRACE','PORT_RESOURCE_TRACE','PPU_GUARD_EA','PPU_CASWATCH','VP_NOFIXPROJ','RSX_CAP_OFFSCREEN','DEPTH_OFF','CULL_OFF','CULL_FLIP')) {
+$diagnosticNames = @(
+    'D3D12_DBG', 'D3D12_IQ', 'RSX_CAP_DIR', 'GCM_FIFO_KICK',
+    'PS3_POLLTOP', 'PORT_CLOCK_PROFILE', 'PS3_SCBLOCK_PROF', 'PORT_HLE_PROFILE',
+    'PORT_HLE_PROFILE_TID', 'PS3_SYNCLOG', 'PERF', 'PSOMISSDBG',
+    'HASHDBG', 'SPU_INTERP_UNLIFTED', 'PS3_WAITBT', 'PS3_SPU_PCWATCH',
+    'SPU_DUMP_OVL', 'YDKJ_SPU_TRACE', 'SPU_CALLTRACE', 'PORT_EVENT_TRACE',
+    'PORT_PPU_SAMPLE', 'GCM_DRAINDBG', 'GCM_CTXDBG', 'GCM_RECDBG',
+    'PORT_GPU_WRITERS', 'PORT_ALLOC_TRACE', 'PORT_LF_TRACE', 'PORT_RESOURCE_TRACE',
+    'PPU_GUARD_EA', 'PPU_CASWATCH', 'VP_NOFIXPROJ', 'RSX_CAP_OFFSCREEN',
+    'DEPTH_OFF', 'CULL_OFF', 'CULL_FLIP', 'PORT_RENDER_TRACE',
+    'PORT_JC_TRACE', 'NO_ALPHATEST'
+)
+foreach ($name in $diagnosticNames) {
     $value = [Environment]::GetEnvironmentVariable($name, 'Process')
     if ($null -ne $value) { $diagnostics[$name]=$value }
 }

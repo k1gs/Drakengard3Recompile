@@ -8,6 +8,10 @@ project(DrakengardRecompile
 # ---------------------------------------------------------------------------
 # Standards
 # ---------------------------------------------------------------------------
+if(NOT WIN32)
+    message(FATAL_ERROR "This port targets Windows with Direct3D 12.")
+endif()
+
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 20)
@@ -173,20 +177,39 @@ if(PORT_ENABLE_SPU)
     endif()
 endif()
 
+# Handwritten code is grouped by responsibility; generated code stays local.
+set(PORT_RUNTIME_SOURCES
+    runtime/frame_clock.cpp
+    runtime/guest_memory.cpp
+    runtime/ppu_vmx.cpp
+    runtime/msdsp_native.c
+)
+set(PORT_COMPAT_SOURCES
+    compat/trophy_abi.cpp
+    compat/resource_api.cpp
+    compat/overlay_api.cpp
+    compat/queue_api.cpp
+)
+set(PORT_DIAGNOSTIC_SOURCES
+    diagnostics/diagnostics.cpp
+    diagnostics/gpu_writer_trace.cpp
+)
+set(PORT_CHECK_SOURCES
+    checks/registry.cpp
+    checks/compat_checks.cpp
+    checks/ppu_vmx_checks.cpp
+    checks/spu_dispatch_checks.cpp
+    checks/spu_task_checks.cpp
+    checks/gcm_checks.cpp
+    checks/msdsp_checks.c
+)
+
 add_executable(${PROJECT_NAME}
     main.cpp
-    msdsp_native.c
-    diagnostics.cpp
-    compat_checks.cpp
-    ppu_vmx_checks.cpp
-    spu_dispatch_checks.cpp
-    spu_task_checks.cpp
-    gcm_checks.cpp
-    gpu_writer_trace.cpp
-    trophy_abi.cpp
-    resource_api.cpp
-    overlay_api.cpp
-    queue_api.cpp
+    ${PORT_RUNTIME_SOURCES}
+    ${PORT_COMPAT_SOURCES}
+    ${PORT_DIAGNOSTIC_SOURCES}
+    ${PORT_CHECK_SOURCES}
     "${CMAKE_CURRENT_BINARY_DIR}/edat_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/spu_workload_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/spu_channels_compat.c"
@@ -202,12 +225,13 @@ add_executable(${PROJECT_NAME}
     ${RECOMP_SOURCES}
     ${SPU_SOURCES}
 )
-set_source_files_properties(msdsp_native.c PROPERTIES
+set(MSDSP_SOURCES runtime/msdsp_native.c checks/msdsp_checks.c)
+set_source_files_properties(${MSDSP_SOURCES} PROPERTIES
     INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
 if(PORT_ENABLE_SPU AND EXISTS "${SPU_DIR}/msdsp_native/msdsp_bytes.h")
-    set_property(SOURCE msdsp_native.c APPEND PROPERTY
+    set_property(SOURCE ${MSDSP_SOURCES} APPEND PROPERTY
         INCLUDE_DIRECTORIES "${SPU_DIR}/msdsp_native")
-    set_property(SOURCE msdsp_native.c APPEND PROPERTY COMPILE_DEFINITIONS PORT_WITH_MSDSP)
+    set_property(SOURCE ${MSDSP_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS PORT_WITH_MSDSP)
 endif()
 if(NOT SPU_SOURCES)
     set_source_files_properties(stubs.cpp PROPERTIES COMPILE_DEFINITIONS PORT_WITHOUT_SPU)
@@ -262,8 +286,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ps3recomp_runtime
 )
 
-# The runtime is C++, and on Apple also Objective-C. Letting CMake infer the
-# link language from the generated C would leave the C++ standard library out.
+# Link the C++ runtime even when the generated entry units are C.
 set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE CXX)
 
 # Windows system import libraries. dbghelp symbolizes crash-handler addresses
@@ -310,8 +333,7 @@ endif()
 #
 #   - warnings off. They are about generated code and nobody will act on them,
 #     and at this volume they bury the diagnostics that matter.
-#   - no floating-point contraction. arm64 fuses a multiply and an add by
-#     default; a PPC fmadd is spelt as one where the lifter means one.
+#   - preserve explicit floating-point operations in generated code.
 #   - /bigobj on MSVC. A single lifted file routinely passes the 65,536-section
 #     limit of the default object format.
 if(MSVC)
