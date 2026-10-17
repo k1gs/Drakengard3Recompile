@@ -10,6 +10,20 @@ The native executable renders the Unreal intro and plays audio. The project incl
 
 The latest implementation checkpoints are `3dabe93` (native log transport and shader pipeline fixes) and `14e61cb` (native DSP plugins). The latest build passed 22 portable tests and seven focused native checks, including a native/interpreter comparison of the DSP PIC initializer's registers and local store. This comparison does not cover every DSP function.
 
+## Rendering progress
+
+Screenshots from the experimental native Windows build. Intro frames are already visible, although rendering and performance still need work. These captures show intro playback; a working menu and gameplay have not yet been confirmed.
+
+### Unreal Engine intro
+
+![Unreal Engine intro displayed by the native Windows build](assets/screenshots/native-unreal-intro.png)
+
+### Intro scene
+
+![Intro scene displayed by the native Windows build, with visible rendering issues](assets/screenshots/native-intro-scene.png)
+
+The scene capture shows the current dark image and subtitle artifacts, with approximately 0.33 FPS reported in the window title at the time of capture.
+
 ## Research and implementation notes
 
 These documents record earlier milestones and investigations. Their historical blocker descriptions may have been superseded by later work.
