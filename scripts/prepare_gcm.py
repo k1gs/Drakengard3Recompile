@@ -139,6 +139,15 @@ void port_gcm_contract_begin(u32 ea) {
     vm_write32(GCM_CONTROL_GUEST_ADDR,0); vm_write32(GCM_CONTROL_GUEST_ADDR+4,0);
 }
 u32 port_gcm_contract_get(void) { return s_fifo_getoff; }
+/* Called only by the FIFO owner's opt-in clock profiler. No guest mutation. */
+void port_gcm_trace_progress(void) {
+    u32 context=s_gcm_ctx_out_ea ? vm_read32(s_gcm_ctx_out_ea) : s_gcm_context_ea;
+    u32 ea=gcm_io2ea(s_fifo_getoff);
+    fprintf(stderr,"[gcm-progress] flips=%u status=%u pending=%ld get=%08X put=%08X word=%08X ctx=%08X current=%08X callbacks=%ld\\n",
+        s_flip_request_count,s_flip_status,(long)s_flip_pending,s_fifo_getoff,
+        vm_read32(GCM_CONTROL_GUEST_ADDR),ea?vm_read32(ea):0,context,
+        context?vm_read32(context+8):0,(long)s_gcm_pending);
+}
 void port_gcm_contract_default_context(u32 context) {
     s_gcm_ctx_out_ea=context+0x10;
     vm_write32(s_gcm_ctx_out_ea,context);

@@ -256,7 +256,7 @@ extern "C" void port_install_diagnostics()
     if(std::getenv("PORT_PPU_SAMPLE")) {
         std::thread([] {
             extern void port_sample_ppu_threads();
-            for(unsigned i=0;i<3;i++) {
+            for(unsigned i=0;i<10;i++) {
                 Sleep(30000);
                 port_sample_ppu_threads();
             }

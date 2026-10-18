@@ -104,6 +104,14 @@ static void pop_body(ppu_context* ctx)
                     (unsigned long long)ctx->thread_id,(unsigned long long)ctx->lr,
                     (unsigned long long)ctx->gpr[1],out,pop,push,size,depth,
                     (unsigned long long)buffer);
+                uint32_t stack=(uint32_t)ctx->gpr[1];
+                for(unsigned level=0;level<4 && stack>=0x10000 && stack<=0xFFFFFFE0u;level++) {
+                    uint32_t next=vm_read32((uint64_t)stack+4);
+                    fprintf(stderr,"[queue-caller] level=%u sp=%08X return=%08X backchain=%08X\n",
+                        level,stack,vm_read32((uint64_t)stack+20),next);
+                    if(next<=stack || next-stack>0x100000) break;
+                    stack=next;
+                }
             }
             logged=now;
         }

@@ -21,6 +21,29 @@ def prepare(sdk, output):
     # Visible tests require an explicit runner opt-in; direct launches stay hidden.
     replace('WS_OVERLAPPEDWINDOW | WS_VISIBLE,',
             'WS_OVERLAPPEDWINDOW | ((getenv("PORT_VISIBLE_TEST") && !strcmp(getenv("PORT_VISIBLE_TEST"),"1")) ? WS_VISIBLE : 0),')
+    replace('''        if (wp == VK_ESCAPE) {
+            s_d3d.window_closed = 1;
+            DestroyWindow(hwnd);
+        }''', '''        /* Escape is guest Start. Emergency exit belongs to the runner's
+         * focused-window F12 watchdog, not to a guest control key. */''')
+    replace('static HWND create_window(u32 width, u32 height, const char* title)', r'''/* No window is created by this contract check. Keyboard Start must not
+ * destroy the render window; the bounded runner owns emergency F12 exit. */
+int port_check_window_input(void)
+{
+    int saved=s_d3d.window_closed;
+    s_d3d.window_closed=0;
+    d3d12_wndproc(NULL,WM_KEYDOWN,VK_ESCAPE,0);
+    int escape_preserved=!s_d3d.window_closed;
+    s_d3d.window_closed=0;
+    d3d12_wndproc(NULL,WM_KEYDOWN,VK_RETURN,0);
+    int enter_preserved=!s_d3d.window_closed;
+    s_d3d.window_closed=saved;
+    fprintf(stderr,"[compat-check] keyboard Start keeps window: Escape=%d Enter=%d %s\n",
+        escape_preserved,enter_preserved,escape_preserved&&enter_preserved?"PASS":"FAIL");
+    return escape_preserved&&enter_preserved?0:1;
+}
+
+static HWND create_window(u32 width, u32 height, const char* title)''')
     replace('    int dumping = (s_d3d.dump_frames_left > 0 && s_d3d.readback_buf\n                   && s_d3d.dump_skip_left == 0);', r'''    int dumping = (s_d3d.dump_frames_left > 0 && s_d3d.readback_buf
                    && s_d3d.dump_skip_left == 0);
     { const char* trigger=getenv("PORT_CAPTURE_TRIGGER");

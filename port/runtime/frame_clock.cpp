@@ -14,6 +14,7 @@ extern "C"
     void cellGcm_rsx_process_fifo(void);
     void cellGcm_fifo_kick_wait(unsigned);
     unsigned cellGcm_flip_request_count(void);
+    void port_gcm_trace_progress(void);
 }
 
 static volatile LONG g_frames_presented = 0;
@@ -152,6 +153,7 @@ static DWORD WINAPI frame_clock(LPVOID)
         }
         if (profile && seconds() - window >= 3)
         {
+            port_gcm_trace_progress();
             double elapsed = seconds() - window;
             fprintf(stderr,
                     "[clock-perf] wall=%.3f idle=%.3f drain=%.3f/%u present=%.3f/%u other=%.3f\n",

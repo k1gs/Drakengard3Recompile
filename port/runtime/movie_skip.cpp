@@ -5,6 +5,7 @@
 #include <cstdlib>
 
 extern "C" int port_check_movie_detection();
+extern "C" int port_check_window_input();
 
 namespace
 {
@@ -65,5 +66,5 @@ extern "C" int port_check_movie_skip()
         start_button(true, 2800, 1000, 2000) == 0 && start_button(true, 1400, 1000, 0) == 0;
     std::fprintf(stderr, "[compat-check] movie skip: opt-in, release, cadence, stalled video: %s\n",
                  ok ? "PASS" : "FAIL");
-    return ok && port_check_movie_detection() == 0 ? 0 : 1;
+    return ok && port_check_movie_detection() == 0 && port_check_window_input() == 0 ? 0 : 1;
 }
