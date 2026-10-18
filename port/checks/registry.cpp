@@ -4,6 +4,7 @@
 
 extern "C"
 {
+    int port_check_present_boundary();
     int port_check_lwcond_layout();
     int port_check_memory_table();
     int port_check_queue();
@@ -32,6 +33,7 @@ struct Check
     int (*run)();
 };
 const Check checks[] = {
+    {"--check-present-boundary", port_check_present_boundary},
     {"--check-lwcond", port_check_lwcond_layout},
     {"--check-memory", port_check_memory_table},
     {"--check-queue", port_check_queue},

@@ -6,23 +6,46 @@ An experimental native Windows port of Drakengard 3, based on static recompilati
 
 The native executable renders the Unreal intro and plays audio. The project includes a full PPU lift, 40 embedded SPU images, raw SPURS jobs, and 71 additional native functions for the streamed MultiStream DSP plugins. The DSP plugins are selected only when their runtime code matches the verified modules from the user's EBOOT.
 
-**This is not yet a playable port.** Later movie playback can still drop to roughly 0.7 FPS, rendering has visible issues, and a working main menu, controls, and gameplay have not been confirmed. Some intro sections run at around 30 FPS; these measurements do not represent overall performance.
+**This is not yet a playable port.** Movie playback now runs at approximately 30 FPS on the tested machine. The title screen with the Start prompt has been reached and visually confirmed by the user. The menu still has overlapping images and flickering; menu navigation, gameplay, and Switch-mode controllers are not yet verified.
 
-The latest implementation checkpoints are `3dabe93` (native log transport and shader pipeline fixes) and `14e61cb` (native DSP plugins). The latest build passed 22 portable tests and seven focused native checks, including a native/interpreter comparison of the DSP PIC initializer's registers and local store. This comparison does not cover every DSP function.
+The latest build passed 25 portable tests and 19 native checks, including presentation boundaries and a native/interpreter comparison of the DSP PIC initializer's registers and local store. These checks do not establish full game compatibility.
 
 ## Rendering progress
 
-Screenshots from the experimental native Windows build. Intro frames are already visible, although rendering and performance still need work. These captures show intro playback; a working menu and gameplay have not yet been confirmed.
+Actual captures from the experimental native Windows build. Performance numbers describe these tested intro sections, not gameplay.
 
-### Unreal Engine intro
+### Native movie playback
 
-![Unreal Engine intro displayed by the native Windows build](assets/screenshots/native-unreal-intro.png)
+![Native movie playback after fixing feedback from the previous framebuffer](assets/screenshots/native-movie-frame.png)
 
-### Intro scene
+The movie now uses its actual YUV video textures. A screen-size heuristic previously replaced the luma texture with the previous rendered frame, causing persistent silhouettes and overlapping subtitles.
 
-![Intro scene displayed by the native Windows build, with visible rendering issues](assets/screenshots/native-intro-scene-cropped.png)
+### Title screen
 
-The scene capture shows the current dark image and subtitle artifacts, with approximately 0.33 FPS reported in the window title at the time of capture.
+![Drakengard 3 title screen with the Start prompt](assets/screenshots/native-title-screen.png)
+
+User-provided capture at approximately 29 FPS. The title screen is visible, but overlapping images and flickering in the menu remain unresolved.
+
+## Test controls
+
+Focus the game window before pressing keys. The keyboard is used when no XInput controller is connected. Pass `-KeyboardOnly` to the runner to select it explicitly, even when a controller is connected.
+
+| Keyboard | Game action |
+| --- | --- |
+| Enter / Esc | Start; request a skip in skippable cutscenes |
+| Space / Z | Cross / confirm |
+| Backspace / X | Circle / back |
+| Arrow keys | D-pad and left stick |
+| A / S | Square / Triangle |
+| Q / W | L1 / R1 |
+| 1 / 2 | L2 / R2 |
+| Tab | Select |
+
+```powershell
+.\scripts\run-game.ps1 -Run keyboard-test-001 -Seconds 300 -Interactive -KeyboardOnly
+```
+
+Choose a fresh Run ID each time. The test runner stops the game at the specified time limit. Cutscene skipping remains under the game's control; these keys send the real Start button, without bypassing game logic. An 8BitDo controller in Switch mode is not supported by the current Windows XInput backend; physical controller testing is pending.
 
 ## Quick start
 

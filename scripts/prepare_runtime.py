@@ -9,6 +9,7 @@ from prepare_spu_tasks import workload as prepare_tasks, prepare_spurs
 from prepare_gcm import prepare as prepare_gcm
 from prepare_memory import prepare as prepare_memory
 from prepare_renderer import prepare as prepare_renderer
+from prepare_input import prepare as prepare_input
 
 
 def patch_sysprx(text):
@@ -38,6 +39,7 @@ def main():
     prepare_spurs(a.sdk, a.out.parent)
     prepare_gcm(a.sdk, a.out.parent)
     prepare_renderer(a.sdk, a.out.parent)
+    prepare_input(a.sdk, a.out.parent)
     loader=a.sdk/'runtime/ppu/ppu_loader.cpp'
     loader_text=loader.read_text(encoding='utf-8')
     anchor='        ppu_context* c = g_resv_ctxs[i];\n        if (!c) continue;\n        fprintf(stderr, "[WATCHDOG]'

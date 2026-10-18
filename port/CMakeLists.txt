@@ -218,6 +218,7 @@ add_executable(${PROJECT_NAME}
     "${CMAKE_CURRENT_BINARY_DIR}/sys_event_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/cellSpurs_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/cellGcmSys_compat.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/cellPad_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/rsx_d3d12_backend_compat.c"
     stubs.cpp
     ${PS3RECOMP_SCAFFOLD}

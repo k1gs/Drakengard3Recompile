@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidateRange(5,300)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001', [switch]$CaptureFrames, [switch]$CaptureRsx, [switch]$Interactive)
+param([ValidateRange(5,300)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001', [switch]$CaptureFrames, [switch]$CaptureRsx, [switch]$Interactive, [switch]$KeyboardOnly)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $exe = Join-Path $root 'build/game/DrakengardRecompile.exe'
@@ -26,13 +26,14 @@ $values = @{
     PORT_FIFO_DUMP_DIR=$fifoDir
 }
 $previous = @{}
+if ($KeyboardOnly) { $values.PORT_KEYBOARD_ONLY='1' }
 $diagnostics = @{}
 if ($env:PORT_SPU_PROFILE) { $diagnostics.PORT_SPU_PROFILE=$env:PORT_SPU_PROFILE }
 if ($env:PORT_MSDSP_NATIVE) { $diagnostics.PORT_MSDSP_NATIVE=$env:PORT_MSDSP_NATIVE }
 $diagnosticNames = @(
-    'D3D12_DBG', 'D3D12_IQ', 'RSX_CAP_DIR', 'GCM_FIFO_KICK',
+    'D3D12_DBG', 'D3D12_IQ', 'RSX_CAP', 'RSX_CAP_DIR', 'CELLMARK_DUMP_SKIP', 'GCM_FIFO_KICK',
     'PS3_POLLTOP', 'PORT_CLOCK_PROFILE', 'PS3_SCBLOCK_PROF', 'PORT_HLE_PROFILE',
-    'PORT_HLE_PROFILE_TID', 'PS3_SYNCLOG', 'PERF', 'PSOMISSDBG',
+    'PORT_HLE_PROFILE_TID', 'PORT_HLE_PROFILE_NAME', 'PS3_SYNCLOG', 'PERF', 'PSOMISSDBG', 'RSX_ACCUM_FRAME',
     'HASHDBG', 'SPU_INTERP_UNLIFTED', 'PS3_WAITBT', 'PS3_SPU_PCWATCH',
     'SPU_DUMP_OVL', 'YDKJ_SPU_TRACE', 'SPU_CALLTRACE', 'PORT_EVENT_TRACE',
     'PORT_PPU_SAMPLE', 'GCM_DRAINDBG', 'GCM_CTXDBG', 'GCM_RECDBG',

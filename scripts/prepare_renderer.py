@@ -17,6 +17,33 @@ def prepare(sdk, output):
         if text.count(old)!=count:
             raise ValueError('Pinned renderer anchor changed: '+old[:100])
         text=text.replace(old,new)
+    # Dimensions do not identify a texture's producer. In particular, the
+    # movie's full-size B8 luma plane must sample guest memory, not the previous
+    # displayed frame (which feeds old images and subtitles back into itself).
+    start=text.index('            /* Display-sized sampler source -> the rendered frame. */')
+    end=text.index('            /* A sampler whose guest buffer was never written,',start)
+    if 'SCREEN_AS_TEX' not in text[start:end] or 's_screen_copy' not in text[start:end]:
+        raise ValueError('Pinned screen-size sampler override changed')
+    text=text[:start]+text[end:]
+    # A display clear after an actual new flip closes the previous frame.
+    # Its draw count says nothing about completeness: a movie may use one
+    # quad after a scene with hundreds of draws. A historical maximum delayed
+    # that quad for ~33 flips, reducing a 30-Hz movie to ~0.9 actual presents/s.
+    start=text.index('    static u32 s_frame_draws_max = 0;')
+    end=text.index('    /* RSX_ACCUM_FRAME=1:',start)
+    if 's_frame_draws_max / 4' not in text[start:end]:
+        raise ValueError('Pinned clear-boundary size gate changed')
+    text=text[:start]+r'''    {
+        extern unsigned cellGcm_flip_request_count(void);
+        static unsigned s_last_present_flip=0;
+        unsigned fc=cellGcm_flip_request_count();
+        if(fc) {
+            if(fc==s_last_present_flip) return;
+            s_last_present_flip=fc;
+        }
+    }
+
+'''+text[end:]
     # A 16-KiB decode window can carry at most 512 CONST instructions, each
     # consuming 16 instruction bytes and 16 payload bytes. b1 also has five
     # metadata rows; round (512+5)*16 to the D3D12 256-byte CBV alignment.
@@ -303,6 +330,35 @@ int port_check_pipeline_cache(void)
                     if (!s_d3d.draws[d].is_clear && s_d3d.draws[d].rt_off) { eligible=1;break; }
             }
             if (s_d3d.frame_count >= target && eligible) {''')
+    # Preserve the linear B8 video planes at the same boundary as GPU readback.
+    # This distinguishes stale decoder input from accumulation in the renderer.
+    replace('''            } else if (dxgi == DXGI_FORMAT_R32G32B32A32_FLOAT) {''', '''            } else if (dxgi == DXGI_FORMAT_R8_UNORM) {
+                rv=gv=bv=srow[x]/255.0f;
+            } else if (dxgi == DXGI_FORMAT_R32G32B32A32_FLOAT) {''')
+    replace('''    u32 bpp = (dxgi == DXGI_FORMAT_R16G16B16A16_FLOAT) ? 8 :''',
+            '''    u32 bpp = (dxgi == DXGI_FORMAT_R8_UNORM) ? 1 :
+              (dxgi == DXGI_FORMAT_R16G16B16A16_FLOAT) ? 8 :''')
+    replace('''    printf("[RSXCAP] frame''', r'''    for(unsigned i=0;i<VP_TEX_SLOTS;i++) {
+        const VPTexSlot* t=&s_d3d.vp_tex[i];
+        if(!t->used || !t->res || t->fmt!=0xA1) continue;
+        snprintf(path,sizeof(path),"%s/gpu_%08X_b8.bmp",dir,t->key);
+        cap_readback_write(t->res,t->w,t->h,DXGI_FORMAT_R8_UNORM,
+                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,fi,path);
+    }
+    printf("[RSXCAP] frame''')
+    replace('''        /* Per-draw VP constant banks for the first few offscreen-RT geometry''',r'''        for (u32 d=0;d<ndraws && d<MAX_DRAWS;d++) {
+            const D3D12DrawRecord* r=&s_d3d.draws[d];
+            if(r->is_clear) continue;
+            for(unsigned u=0;u<3;u++) {
+                if(!r->tex[u].set || r->tex[u].fmt!=0xA1) continue;
+                u64 bytes=(u64)r->tex[u].w*r->tex[u].h;
+                if(!bytes || bytes>0x100000000ULL-r->tex[u].off) continue;
+                snprintf(path,sizeof(path),"%s/op%03u_t%u_b8.bin",dir,d,u);
+                FILE* f=fopen(path,"wb");
+                if(f) { fwrite(vm_base+r->tex[u].off,1,(size_t)bytes,f);fclose(f); }
+            }
+        }
+        /* Per-draw VP constant banks for the first few offscreen-RT geometry''')
     # Fixture executes the same constant-upload function used for every draw.
     anchor='/* Which offscreen surface (if any) does the current RSX state render to?'
     if text.count(anchor)!=1: raise ValueError('Pinned VP fixture anchor changed')
@@ -455,6 +511,44 @@ int port_check_vertex_constants(void)
     }
     const u32 key_off = off;         /* lookup key: the offset as bound */''')
     text=prepare_texture_units(text)
+    text+=r'''
+/* CPU contract: exercise the actual clear boundary with real flip requests.
+ * D3D12 remains uninitialized; no GPU work or completion is synthesized. */
+extern s32 cellGcmSetDisplayBuffer(u32,u32,u32,u32,u32);
+extern s32 cellGcmSetFlipCommand(u32);
+int port_check_present_boundary(void)
+{
+    if(s_d3d.initialized || s_d3d.draw_count) return 2;
+    if(cellGcmSetDisplayBuffer(0,0,5120,1280,720)) return 2;
+    memset(s_d3d.draws,0,sizeof(s_d3d.draws));
+    s_d3d.draw_count=135;
+    if(cellGcmSetFlipCommand(0)) return 2;
+    d3d12_clear(NULL,0,0,1.0f,0);
+    int large=s_d3d.draw_count==0;
+    s_d3d.draw_count=1;
+    d3d12_clear(NULL,0,0,1.0f,0);
+    int duplicate_held=s_d3d.draw_count==1;
+    if(cellGcmSetFlipCommand(0)) return 2;
+    d3d12_clear(NULL,0,0,1.0f,0);
+    int one_draw=s_d3d.draw_count==0;
+    unsigned released=0;
+    for(unsigned i=0;i<65;i++) {
+        s_d3d.draw_count=1;
+        if(cellGcmSetFlipCommand(0)) return 2;
+        d3d12_clear(NULL,0,0,1.0f,0);
+        if(!s_d3d.draw_count) released++;
+    }
+    s_d3d.draw_count=1;s_d3d.draws[0].rt_off=0x440000;
+    if(cellGcmSetFlipCommand(0)) return 2;
+    d3d12_clear(NULL,0,0,1.0f,0);
+    int offscreen_held=s_d3d.draw_count==1;
+    int ok=large && duplicate_held && one_draw && released==65 && offscreen_held;
+    fprintf(stderr,"[compat-check] presentation boundary: large=%d duplicate-held=%d one-draw=%d successive=%u/65 offscreen-held=%d: %s\n",
+        large,duplicate_held,one_draw,released,offscreen_held,ok?"PASS":"FAIL");
+    memset(s_d3d.draws,0,sizeof(s_d3d.draws));s_d3d.draw_count=0;
+    return ok?0:1;
+}
+'''
     def include(m):
         path=source.parent/m[1]
         return '#include "'+path.resolve().as_posix()+'"' if path.is_file() else m[0]

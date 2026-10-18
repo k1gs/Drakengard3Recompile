@@ -5,8 +5,11 @@
 #include <cstdlib>
 #include <mutex>
 #include <atomic>
+#include <cstring>
 
-// Opt-in inclusive timing of outermost HLE calls on the main PPU thread.
+extern "C" int ppu_prof_snapshot(int, unsigned *, unsigned *, const char **);
+
+// Opt-in inclusive timing of outermost HLE calls on the selected PPU thread.
 // Guest gaps include direct syscalls, lifted code and host scheduling delays.
 struct PortHleProfile
 {
@@ -55,7 +58,16 @@ struct PortHleProfile
             const char *v = std::getenv("PORT_HLE_PROFILE_TID");
             return v ? (unsigned)std::strtoul(v, nullptr, 10) : 1u;
         }();
-        if (ctx->thread_id != target)
+        static const char *target_name = std::getenv("PORT_HLE_PROFILE_NAME");
+        if (target_name && *target_name)
+        {
+            unsigned named_tid = 0, pc = 0;
+            const char *name = nullptr;
+            if (!ppu_prof_snapshot((int)ctx->thread_id - 1, &named_tid, &pc, &name) ||
+                named_tid != ctx->thread_id || !name || std::strcmp(name, target_name) != 0)
+                return;
+        }
+        else if (ctx->thread_id != target)
             return;
         entered = true;
         outer = depth++ == 0;
