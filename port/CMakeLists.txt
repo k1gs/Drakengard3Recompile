@@ -180,9 +180,11 @@ endif()
 # Handwritten code is grouped by responsibility; generated code stays local.
 set(PORT_RUNTIME_SOURCES
     runtime/frame_clock.cpp
+    runtime/movie_skip.cpp
     runtime/guest_memory.cpp
     runtime/ppu_vmx.cpp
     runtime/msdsp_native.c
+    runtime/audio_decoder_native.c
 )
 set(PORT_COMPAT_SOURCES
     compat/trophy_abi.cpp
@@ -202,6 +204,7 @@ set(PORT_CHECK_SOURCES
     checks/spu_task_checks.cpp
     checks/gcm_checks.cpp
     checks/msdsp_checks.c
+    checks/audio_decoder_checks.c
 )
 
 add_executable(${PROJECT_NAME}
@@ -233,6 +236,14 @@ if(PORT_ENABLE_SPU AND EXISTS "${SPU_DIR}/msdsp_native/msdsp_bytes.h")
     set_property(SOURCE ${MSDSP_SOURCES} APPEND PROPERTY
         INCLUDE_DIRECTORIES "${SPU_DIR}/msdsp_native")
     set_property(SOURCE ${MSDSP_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS PORT_WITH_MSDSP)
+endif()
+set(AUDIO_DECODER_SOURCES runtime/audio_decoder_native.c checks/audio_decoder_checks.c)
+set_source_files_properties(${AUDIO_DECODER_SOURCES} PROPERTIES
+    INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
+if(PORT_ENABLE_SPU AND EXISTS "${SPU_DIR}/audio_decoder_native/audio_decoder_bytes.h")
+    set_property(SOURCE ${AUDIO_DECODER_SOURCES} APPEND PROPERTY
+        INCLUDE_DIRECTORIES "${SPU_DIR}/audio_decoder_native")
+    set_property(SOURCE ${AUDIO_DECODER_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS PORT_WITH_AUDIO_DECODER)
 endif()
 if(NOT SPU_SOURCES)
     set_source_files_properties(stubs.cpp PROPERTIES COMPILE_DEFINITIONS PORT_WITHOUT_SPU)

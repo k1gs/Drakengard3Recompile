@@ -4,6 +4,7 @@
 
 extern "C"
 {
+    int port_check_movie_skip();
     int port_check_present_boundary();
     int port_check_lwcond_layout();
     int port_check_memory_table();
@@ -16,12 +17,15 @@ extern "C"
     int port_check_pipeline_cache();
     int port_check_texture_units();
     int port_check_msdsp();
+    int port_check_audio_decoder();
     int port_check_fragment_constants();
     int port_check_jobchain_resume();
     int port_check_vpkswss();
     int port_check_spu_return();
     int port_check_spu_task_snapshot();
     int port_check_gcm_park();
+    int port_check_fifo_flip_boundary();
+    int port_check_prepare_flip();
     int port_check_spu_interpreter_halt();
 }
 
@@ -33,6 +37,7 @@ struct Check
     int (*run)();
 };
 const Check checks[] = {
+    {"--check-movie-skip", port_check_movie_skip},
     {"--check-present-boundary", port_check_present_boundary},
     {"--check-lwcond", port_check_lwcond_layout},
     {"--check-memory", port_check_memory_table},
@@ -45,12 +50,15 @@ const Check checks[] = {
     {"--check-pipeline-cache", port_check_pipeline_cache},
     {"--check-texture-units", port_check_texture_units},
     {"--check-msdsp", port_check_msdsp},
+    {"--check-audio-decoder", port_check_audio_decoder},
     {"--check-fragment-constants", port_check_fragment_constants},
     {"--check-jobchain-resume", port_check_jobchain_resume},
     {"--check-vpkswss", port_check_vpkswss},
     {"--check-spu-return", port_check_spu_return},
     {"--check-spu-task-snapshot", port_check_spu_task_snapshot},
     {"--check-gcm-park", port_check_gcm_park},
+    {"--check-fifo-flip-boundary", port_check_fifo_flip_boundary},
+    {"--check-prepare-flip", port_check_prepare_flip},
     {"--check-spu-interpreter-halt", port_check_spu_interpreter_halt},
 };
 } // namespace

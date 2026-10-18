@@ -3,6 +3,8 @@
 typedef void (*port_spu_fn)(spu_context *);
 extern port_spu_fn spu_lookup(uint32_t, int);
 extern void spu_begin_image(int);
+extern void port_audio_decoder_register(void);
+extern port_spu_fn port_audio_decoder_lookup(const spu_context *, uint32_t);
 
 #ifdef PORT_WITH_MSDSP
 #include "msdsp_bytes.h"
@@ -27,6 +29,7 @@ static int matches(const spu_context *ctx)
 
 void port_msdsp_register(void)
 {
+    port_audio_decoder_register();
 #ifdef PORT_WITH_MSDSP
     const char *e = getenv("PORT_MSDSP_NATIVE");
     native_enabled = !(e && e[0] == '0');
@@ -37,6 +40,10 @@ void port_msdsp_register(void)
 
 port_spu_fn port_msdsp_lookup(const spu_context *ctx, uint32_t pc)
 {
+    if (pc == 0x21D20u && ctx && ctx->image_id == 41) {
+        port_spu_fn audio = port_audio_decoder_lookup(ctx, pc);
+        if (audio) return audio;
+    }
 #ifdef PORT_WITH_MSDSP
     if (!ctx || ctx->image_id != 41 || pc < DSP_BASE || pc >= 0x39D20)
         return NULL;

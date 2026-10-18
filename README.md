@@ -6,9 +6,9 @@ An experimental native Windows port of Drakengard 3, based on static recompilati
 
 The native executable renders the Unreal intro and plays audio. The project includes a full PPU lift, 40 embedded SPU images, raw SPURS jobs, and 71 additional native functions for the streamed MultiStream DSP plugins. The DSP plugins are selected only when their runtime code matches the verified modules from the user's EBOOT.
 
-**This is not yet a playable port.** Movie playback now runs at approximately 30 FPS on the tested machine. The title screen with the Start prompt has been reached and visually confirmed by the user. The menu still has overlapping images and flickering; menu navigation, gameplay, and Switch-mode controllers are not yet verified.
+**This is not yet a playable port.** Movie playback runs at approximately 30 FPS on the tested machine. The title screen has been visually confirmed by the user, and automated keyboard input reaches the main menu. After presentation fixes, a hidden test recorded approximately 27–30 FPS and 170 menu frames without the previously observed blue artifact or black flashes. Frame updates later stopped; prolonged stability, gameplay, and Switch-mode controllers remain unverified.
 
-The latest build passed 25 portable tests and 19 native checks, including presentation boundaries and a native/interpreter comparison of the DSP PIC initializer's registers and local store. These checks do not establish full game compatibility.
+The latest local build passed 25 portable tests and 23 native checks, including ordered clears, FIFO flip boundaries, deferred flip callbacks, and native/interpreter DSP comparisons. The experimental audio decoder remains disabled by default. These checks do not establish full game compatibility.
 
 ## Rendering progress
 
@@ -28,6 +28,8 @@ User-provided capture at approximately 29 FPS. The title screen is visible, but 
 
 ## Test controls
 
+The executable keeps its render window hidden by default. Visible tests require the explicit `-Interactive` option; F12 closes an interactive test, and the runner enforces the requested time limit. Hidden captures remain the default while rendering stability is investigated.
+
 Focus the game window before pressing keys. The keyboard is used when no XInput controller is connected. Pass `-KeyboardOnly` to the runner to select it explicitly, even when a controller is connected.
 
 | Keyboard | Game action |
@@ -42,10 +44,12 @@ Focus the game window before pressing keys. The keyboard is used when no XInput 
 | Tab | Select |
 
 ```powershell
-.\scripts\run-game.ps1 -Run keyboard-test-001 -Seconds 300 -Interactive -KeyboardOnly
+.\scripts\run-game.ps1 -Run keyboard-test-001 -Seconds 300 -SkipIntro -CaptureFrames -KeyboardOnly
 ```
 
 Choose a fresh Run ID each time. The test runner stops the game at the specified time limit. Cutscene skipping remains under the game's control; these keys send the real Start button, without bypassing game logic. An 8BitDo controller in Switch mode is not supported by the current Windows XInput backend; physical controller testing is pending.
+
+Add `-SkipIntro` (alias: `-SkipMovies`) to request automatic skipping. While the renderer detects a full-screen YUV movie, it sends short Start presses through the normal pad API. It releases Start between presses and stops when video frames stop arriving. This also applies to later prerecorded movies; engine-rendered cutscenes still require manual input. Menus receive no automatic confirmation presses.
 
 ## Quick start
 

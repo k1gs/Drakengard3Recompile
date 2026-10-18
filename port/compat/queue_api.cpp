@@ -99,6 +99,12 @@ static void pop_body(ppu_context* ctx)
         auto now=GetTickCount64();
         if(now-logged>=5000) {
             fprintf(stderr,"[queue] waiting for actual producer q=%08X elapsed_ms=%llu\n",q,(unsigned long long)(now-started));
+            if(std::getenv("PORT_QUEUE_WAIT_TRACE")) {
+                fprintf(stderr,"[queue-wait] tid=%llu lr=%08llX sp=%08llX out=%08X pop=%08X push=%08X size=%u depth=%u buffer=%08llX\n",
+                    (unsigned long long)ctx->thread_id,(unsigned long long)ctx->lr,
+                    (unsigned long long)ctx->gpr[1],out,pop,push,size,depth,
+                    (unsigned long long)buffer);
+            }
             logged=now;
         }
         Sleep(1);

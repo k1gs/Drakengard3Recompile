@@ -30,6 +30,7 @@ extern "C" unsigned ppu_boot_frames_presented(void)
 static void present_guest_frame(void)
 {
     rsx_d3d12_backend_present();
+    cellGcmTickFlip();
     /* This thread increments and guest threads read, so interlocked rather
      * than a volatile ++, which is not an atomic increment. */
     InterlockedIncrement(&g_frames_presented);
@@ -92,7 +93,6 @@ static DWORD WINAPI frame_clock(LPVOID)
         while ((long long)(now - next_tick) >= 0 && fired < 240)
         {
             cellGcmTickVBlank();
-            cellGcmTickFlip();
             /* Present a pending flip BEFORE draining any further. The flip
              * fires at a get==put frame boundary on the guest thread, so the
              * batch held right now is exactly the completed frame; presenting
@@ -138,6 +138,10 @@ static DWORD WINAPI frame_clock(LPVOID)
             unsigned fc = cellGcm_flip_request_count();
             if (fc != last_flip)
             {
+                /* The FIFO drain also publishes a pending notification. Claim
+                 * it here, otherwise the next iteration presents this flip a
+                 * second time, potentially after next-frame writes. */
+                cellGcm_take_flip_pending();
                 show(true);
                 last_flip = fc;
             }

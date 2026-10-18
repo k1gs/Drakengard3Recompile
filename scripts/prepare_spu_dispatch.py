@@ -13,6 +13,13 @@ def prepare(sdk, output):
         source = sdk / 'runtime/spu' / (name + '.c')
         text = source.read_text(encoding='utf-8')
         if name == 'spu_channels':
+            text = replace_once(text, 'static uint64_t spu_host_ns(void)\n{', r'''/* Differential fixtures control time on their own thread only. Normal
+ * execution never installs this callback and keeps the actual host clock. */
+static _Thread_local uint64_t (*port_test_clock)(void);
+void port_spu_set_test_clock(uint64_t (*clock_fn)(void)) { port_test_clock=clock_fn; }
+static uint64_t spu_host_ns(void)
+{
+    if(port_test_clock) return port_test_clock();''')
             text = replace_once(text,
                 '    return (spu_lifted_fn)spu_lookup(lsa, ctx ? ctx->image_id : 0);',
                 '    spu_lifted_fn dsp=(spu_lifted_fn)port_msdsp_lookup(ctx,lsa);\n'
@@ -45,6 +52,22 @@ def prepare(sdk, output):
                 '        spu_dispatch_fn dsp=port_msdsp_lookup(ctx,pc);\n'
                 '        if(dsp) { ctx->pc=pc; __attribute__((musttail)) return dsp(ctx); }')
         else:
+            # Capture the actual inputs of the observed decoder before stepping.
+            # The local fixture can then compare native execution with this interpreter.
+            text = replace_once(text, '    uint64_t steps = 0;', r'''    uint64_t steps = 0;
+    { static _Thread_local int captured, capture_enabled=-1;
+      if(capture_enabled<0) capture_enabled=getenv("PORT_SPU_ENTRY_CAPTURE")!=NULL;
+      if(!captured && capture_enabled && ctx->image_id==41 && start_lsa==0x21D20u) {
+          captured=1;
+          FILE* f=fopen("audio-entry-21D20.bin","wb");
+          if(f) {
+              uint32_t header[4]={0x41554431u,(uint32_t)ctx->image_id,start_lsa,0};
+              fwrite(header,sizeof(header),1,f);fwrite(ctx->gpr,sizeof(ctx->gpr),1,f);
+              fwrite(ctx->ls,1,0x40000,f);fclose(f);
+              fprintf(stderr,"[spu-entry] captured real decoder inputs image=41 pc=21D20\n");
+          }
+      }
+    }''')
             text = replace_once(text, '        steps++;', r'''        steps++;
         { static int profile=-1;static _Thread_local unsigned samples;
           if(profile<0) profile=getenv("PORT_SPU_PROFILE")!=NULL;

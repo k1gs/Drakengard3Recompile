@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidateRange(5,300)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001', [switch]$CaptureFrames, [switch]$CaptureRsx, [switch]$Interactive, [switch]$KeyboardOnly)
+param([ValidateRange(5,300)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001', [switch]$CaptureFrames, [switch]$CaptureRsx, [switch]$Interactive, [switch]$KeyboardOnly, [Alias('SkipIntro')][switch]$SkipMovies, [ValidateRange(1,600)][int]$CaptureCount=12, [ValidateRange(1,3600)][int]$CaptureEvery=120)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $exe = Join-Path $root 'build/game/DrakengardRecompile.exe'
@@ -26,7 +26,25 @@ $values = @{
     PORT_FIFO_DUMP_DIR=$fifoDir
 }
 $previous = @{}
+$values.PORT_VISIBLE_TEST=if ($Interactive) { '1' } else { '0' }
+if ($Interactive -and !('NativeTestInput' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class NativeTestInput {
+    [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    public static bool ExitRequested(int gamePid) {
+        uint foregroundPid;
+        GetWindowThreadProcessId(GetForegroundWindow(), out foregroundPid);
+        return foregroundPid == (uint)gamePid && (GetAsyncKeyState(0x7B) & 0x8000) != 0;
+    }
+}
+'@
+}
 if ($KeyboardOnly) { $values.PORT_KEYBOARD_ONLY='1' }
+if ($SkipMovies) { $values.PORT_SKIP_MOVIES='1' }
 $diagnostics = @{}
 if ($env:PORT_SPU_PROFILE) { $diagnostics.PORT_SPU_PROFILE=$env:PORT_SPU_PROFILE }
 if ($env:PORT_MSDSP_NATIVE) { $diagnostics.PORT_MSDSP_NATIVE=$env:PORT_MSDSP_NATIVE }
@@ -37,6 +55,8 @@ $diagnosticNames = @(
     'HASHDBG', 'SPU_INTERP_UNLIFTED', 'PS3_WAITBT', 'PS3_SPU_PCWATCH',
     'SPU_DUMP_OVL', 'YDKJ_SPU_TRACE', 'SPU_CALLTRACE', 'PORT_EVENT_TRACE',
     'PORT_PPU_SAMPLE', 'GCM_DRAINDBG', 'GCM_CTXDBG', 'GCM_RECDBG',
+    'PORT_QUEUE_WAIT_TRACE', 'PAD_FILE', 'PAD_SCRIPT',
+    'PORT_CLEAR_TRACE', 'PORT_CAPTURE_TRIGGER', 'PORT_CAPTURE_INTERVAL', 'PORT_SPU_ENTRY_CAPTURE', 'PORT_AUDIO_DECODER_NATIVE',
     'PORT_GPU_WRITERS', 'PORT_ALLOC_TRACE', 'PORT_LF_TRACE', 'PORT_RESOURCE_TRACE',
     'PPU_GUARD_EA', 'PPU_CASWATCH', 'VP_NOFIXPROJ', 'RSX_CAP_OFFSCREEN',
     'DEPTH_OFF', 'CULL_OFF', 'CULL_FLIP', 'PORT_RENDER_TRACE',
@@ -48,9 +68,9 @@ foreach ($name in $diagnosticNames) {
 }
 if ($CaptureFrames) {
     # Renderer GPU readback, scoped to this child and this ignored run directory.
-    $values.CELLMARK_DUMP='12'
-    $values.CELLMARK_DUMP_EVERY='120'
-    $values.CELLMARK_DUMP_MINDRAWS='1'
+    $values.CELLMARK_DUMP="$CaptureCount"
+    $values.CELLMARK_DUMP_EVERY="$CaptureEvery"
+    $values.CELLMARK_DUMP_MINDRAWS='0'
     $values.CELLMARK_DUMP_DIR=$runDir
 }
 if ($CaptureRsx) {
@@ -77,11 +97,22 @@ try {
     # object can otherwise lose ExitCode when the child finishes.
     $tracked = [System.Diagnostics.Process]::GetProcessById($process.Id)
     $null = $tracked.Handle
-    $timedOut = !$tracked.WaitForExit($Seconds*1000)
-    if ($timedOut -and !$tracked.HasExited) { $tracked.Kill(); $tracked.WaitForExit() }
+    $testTimer = [System.Diagnostics.Stopwatch]::StartNew()
+    $stopReason = 'process_exit'
+    while (!$tracked.WaitForExit(50)) {
+        if ($Interactive -and [NativeTestInput]::ExitRequested($tracked.Id)) {
+            $stopReason = 'f12'; break
+        }
+        if ($testTimer.Elapsed.TotalSeconds -ge $Seconds) {
+            $stopReason = 'time_limit'; break
+        }
+    }
+    $timedOut = $stopReason -eq 'time_limit'
+    if (!$tracked.HasExited) { $tracked.Kill(); $tracked.WaitForExit() }
     @{
         started_utc=$started.ToString('o'); duration_seconds=([DateTime]::UtcNow-$started).TotalSeconds;
         pid=$process.Id; exit_code=$tracked.ExitCode; stopped_at_time_limit=$timedOut;
+        stop_reason=$stopReason; time_limit_seconds=$Seconds;
         interactive_window=$Interactive.IsPresent;
         log_transport='native inherited file handles';
         exe_sha256=$exeHash;

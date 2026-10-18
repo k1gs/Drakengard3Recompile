@@ -1,6 +1,7 @@
 """Build-local renderer fixes, capture diagnostics and CPU contract fixtures."""
 import re
 from prepare_texture_units import prepare as prepare_texture_units
+from prepare_frame_boundaries import prepare as prepare_frame_boundaries
 
 
 def prepare(sdk, output):
@@ -17,6 +18,80 @@ def prepare(sdk, output):
         if text.count(old)!=count:
             raise ValueError('Pinned renderer anchor changed: '+old[:100])
         text=text.replace(old,new)
+    # Visible tests require an explicit runner opt-in; direct launches stay hidden.
+    replace('WS_OVERLAPPEDWINDOW | WS_VISIBLE,',
+            'WS_OVERLAPPEDWINDOW | ((getenv("PORT_VISIBLE_TEST") && !strcmp(getenv("PORT_VISIBLE_TEST"),"1")) ? WS_VISIBLE : 0),')
+    replace('    int dumping = (s_d3d.dump_frames_left > 0 && s_d3d.readback_buf\n                   && s_d3d.dump_skip_left == 0);', r'''    int dumping = (s_d3d.dump_frames_left > 0 && s_d3d.readback_buf
+                   && s_d3d.dump_skip_left == 0);
+    { const char* trigger=getenv("PORT_CAPTURE_TRIGGER");
+      if(trigger && GetFileAttributesA(trigger)==INVALID_FILE_ATTRIBUTES) dumping=0; }''')
+    replace(r'''        printf("[D3D12] dumped %s (%ux%u)\n", path, s_d3d.width, s_d3d.height);''', r'''        char ops_path[540];snprintf(ops_path,sizeof(ops_path),"%s.ops",path);
+        FILE* ops=fopen(ops_path,"w");
+        if(ops) {
+            fprintf(ops,"frame=%llu draws=%u\n",(unsigned long long)s_d3d.frame_count,s_dbg_last_draws);
+            for(u32 i=0;i<s_dbg_last_draws && i<MAX_DRAWS;i++) {
+                const D3D12DrawRecord* r=&s_d3d.draws[i];
+                fprintf(ops,"%u clear=%d rt=%08X verts=%u cmask=%X fp=%08X depth=%X tex0=%08X source_rt=%d\n",
+                    i,r->is_clear,r->rt_off,r->vertex_count,r->cmask,r->fp_addr,r->depth_key,
+                    r->tex[0].raw,r->tex_rt[0]);
+            }
+            fclose(ops);
+        }
+        printf("[D3D12] dumped %s (%ux%u)\n", path, s_d3d.width, s_d3d.height);''')
+    replace('static void render_frame(void)', r'''
+extern void port_note_video_frame(unsigned);
+static unsigned port_is_movie_draws(const D3D12DrawRecord* draws,u32 count,u32 w,u32 h)
+{
+    const D3D12DrawRecord* r=NULL;
+    for(u32 i=0;i<count;i++) {
+        if(draws[i].is_clear) continue;
+        if(r) return 0;
+        r=&draws[i];
+    }
+    unsigned video=0;
+    if(r) {
+        video=r->is_vp && !r->is_clear && !r->rt_off && r->vertex_count==6;
+        for(unsigned u=0;video && u<3;u++) {
+            unsigned divisor=u?2:1;
+            video=r->tex[u].set && r->tex[u].fmt==0xA1 &&
+                  r->tex[u].w==w/divisor && r->tex[u].h==h/divisor;
+        }
+    }
+    return video;
+}
+int port_check_movie_detection(void)
+{
+    D3D12DrawRecord r[3]={0};r[0].is_clear=1;
+    r[1].is_vp=1;r[1].vertex_count=6;
+    for(unsigned u=0;u<3;u++) {
+        r[1].tex[u].set=1;r[1].tex[u].fmt=0xA1;
+        r[1].tex[u].w=u?640:1280;r[1].tex[u].h=u?360:720;
+    }
+    int video=port_is_movie_draws(r,2,1280,720);
+    r[2]=r[1];int menu=!port_is_movie_draws(r,3,1280,720);
+    r[1].tex[0].fmt=0xA5;int rgba=!port_is_movie_draws(r,2,1280,720);
+    int clear_only=!port_is_movie_draws(r,1,1280,720);
+    int ok=video&&menu&&rgba&&clear_only;
+    fprintf(stderr,"[compat-check] movie detection: ordered-clear=%d menu-rejected=%d rgba-rejected=%d clear-only=%d %s\n",
+        video,menu,rgba,clear_only,ok?"PASS":"FAIL");
+    return ok?0:1;
+}
+static void port_note_movie_draws(void)
+{
+    static unsigned frame_draws=0,movie_only=1;
+    for(u32 i=0;i<s_d3d.draw_count;i++) {
+        if(s_d3d.draws[i].is_clear) continue;
+        frame_draws++;
+        movie_only &= port_is_movie_draws(&s_d3d.draws[i],1,s_d3d.width,s_d3d.height);
+    }
+    if(s_present_this_frame) {
+        port_note_video_frame(frame_draws==1 && movie_only);
+        frame_draws=0;movie_only=1;
+    }
+}
+static void render_frame(void)''')
+    replace('    double _rf0 = perf_on() ? perf_now() : 0.0;',
+            '    port_note_movie_draws();\n    double _rf0 = perf_on() ? perf_now() : 0.0;')
     # Dimensions do not identify a texture's producer. In particular, the
     # movie's full-size B8 luma plane must sample guest memory, not the previous
     # displayed frame (which feeds old images and subtitles back into itself).
@@ -25,50 +100,26 @@ def prepare(sdk, output):
     if 'SCREEN_AS_TEX' not in text[start:end] or 's_screen_copy' not in text[start:end]:
         raise ValueError('Pinned screen-size sampler override changed')
     text=text[:start]+text[end:]
-    # A display clear after an actual new flip closes the previous frame.
-    # Its draw count says nothing about completeness: a movie may use one
-    # quad after a scene with hundreds of draws. A historical maximum delayed
-    # that quad for ~33 flips, reducing a 30-Hz movie to ~0.9 actual presents/s.
-    start=text.index('    static u32 s_frame_draws_max = 0;')
-    end=text.index('    /* RSX_ACCUM_FRAME=1:',start)
-    if 's_frame_draws_max / 4' not in text[start:end]:
-        raise ValueError('Pinned clear-boundary size gate changed')
-    text=text[:start]+r'''    {
-        extern unsigned cellGcm_flip_request_count(void);
-        static unsigned s_last_present_flip=0;
-        unsigned fc=cellGcm_flip_request_count();
-        if(fc) {
-            if(fc==s_last_present_flip) return;
-            s_last_present_flip=fc;
-        }
-    }
-
-'''+text[end:]
     # A 16-KiB decode window can carry at most 512 CONST instructions, each
     # consuming 16 instruction bytes and 16 payload bytes. b1 also has five
     # metadata rows; round (512+5)*16 to the D3D12 256-byte CBV alignment.
     replace('#define VP_FPCB_STRIDE    1280','#define VP_FPCB_STRIDE    8448')
     replace('VPVSEntry             vp_vs[VP_VS_CACHE];',
             'VPVSEntry*            vp_vs;\n    int                   vp_vs_capacity;')
-    # Slots referenced by pending draws are immutable until those draws have
-    # been submitted. Grow only when all existing slots are pinned; after the
-    # batch resets, slots can be reused without moving any other entry.
+    # Keep one owned bytecode entry per compiled program until shutdown.
+    # A FIFO fence retires a batch, not the shaders used by subsequent frames.
     cache_helper=r'''
+static void port_release_vs_cache(void)
+{
+    for(int i=0;i<s_d3d.vp_vs_n;i++)
+        if(s_d3d.vp_vs[i].vs) s_d3d.vp_vs[i].vs->lpVtbl->Release(s_d3d.vp_vs[i].vs);
+    free(s_d3d.vp_vs);s_d3d.vp_vs=NULL;
+    s_d3d.vp_vs_n=0;s_d3d.vp_vs_capacity=0;
+}
+
 static int vp_reserve_vs_slot(void)
 {
     if (s_d3d.vp_vs_n < s_d3d.vp_vs_capacity) return s_d3d.vp_vs_n++;
-    for (int slot=0;slot<s_d3d.vp_vs_n;slot++) {
-        int pinned=0;
-        for (u32 d=0;d<s_d3d.draw_count && d<MAX_DRAWS;d++) {
-            const D3D12DrawRecord* dr=&s_d3d.draws[d];
-            if(dr->is_vp && !dr->is_clear && dr->vs_idx==slot) { pinned=1;break; }
-        }
-        if (!pinned) {
-            if(s_d3d.vp_vs[slot].vs) s_d3d.vp_vs[slot].vs->lpVtbl->Release(s_d3d.vp_vs[slot].vs);
-            memset(&s_d3d.vp_vs[slot],0,sizeof(VPVSEntry));
-            return slot;
-        }
-    }
     int capacity=s_d3d.vp_vs_capacity+VP_VS_CACHE;
     VPVSEntry* entries=(VPVSEntry*)realloc(s_d3d.vp_vs,sizeof(VPVSEntry)*(size_t)capacity);
     if(!entries) { fprintf(stderr,"[VP] shader cache allocation failed\n");abort(); }
@@ -79,6 +130,8 @@ static int vp_reserve_vs_slot(void)
 
 '''
     replace('static int vp_get_vs(const rsx_state* st)',cache_helper+'static int vp_get_vs(const rsx_state* st)')
+    replace('    /* Release D3D12 resources */',
+            '    port_release_vs_cache();\n\n    /* Release D3D12 resources */')
     replace('''    int slot;
     if (s_d3d.vp_vs_n < VP_VS_CACHE) slot = s_d3d.vp_vs_n++;
     else {  /* evict slot 0 */
@@ -146,7 +199,9 @@ static int port_decompile_guest_fp(const u8* ucode,u32 bytes,int exp32,u32 cube_
             'int n = port_decompile_guest_fp(vm_base + off, 4096, exp32, cube_mask, hlsl, sizeof(hlsl));')
     replace('    HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_fp", NULL, NULL,',r'''    static unsigned compile_seq=0;
     unsigned seq=++compile_seq;
-    int trace=getenv("PORT_RENDER_TRACE") && seq<=128;
+    const char* render_trace=getenv("PORT_RENDER_TRACE");
+    unsigned trace_limit=render_trace && atoi(render_trace)>1 ? (unsigned)atoi(render_trace) : 128u;
+    int trace=render_trace && seq<=trace_limit;
     ULONGLONG compile_started=GetTickCount64();
     if(trace) fprintf(stderr,"[RENDER] FP compile begin seq=%u fp=%08X vs=%08X code=%08X slot=%d gen=%u blend=%08X nrt=%d fmt=%u exp=%d mask=%X cull=%X cube=%X depth=%X\n",seq,fp_addr,vs_hash,uhash,vs_idx,s_d3d.vp_gen,blend,nrt,(unsigned)rtfmt,exp32,cmask,cull,cube_mask,depth_key);
     HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_fp", NULL, NULL,''')
@@ -203,7 +258,9 @@ static ID3D12PipelineState* port_find_fp_pso(const VPFPEntry* key)
 {
     for(int i=0;i<s_d3d.vp_fp_n;i++) {
         const VPFPEntry* q=&s_d3d.vp_fp[i];
-        if(q->fp_addr==key->fp_addr && q->vs_idx==key->vs_idx &&
+        /* The compiled VS identity survives relocation in the bytecode cache.
+         * A recycled slot is distinguished by vs_hash, never by its index. */
+        if(q->fp_addr==key->fp_addr &&
            q->vs_hash==key->vs_hash && q->gen==key->gen &&
            q->blend==key->blend && q->nrt==key->nrt && q->rtfmt==key->rtfmt &&
            q->exp32==key->exp32 && q->ucode_hash==key->ucode_hash &&
@@ -224,12 +281,14 @@ int port_check_pipeline_cache(void)
     int ok=1;unsigned hits=0,misses=0;
     for(unsigned i=0;i<600;i++) {
         key.fp_addr=port_fp_address_key(0xB781+0x500*i);
+        /* A program may return in a different slot after VS cache eviction. */
+        key.vs_idx=(int)(i%64);
         if(port_find_fp_pso(&key)==key.pso) hits++;else ok=0;
     }
     /* Each compile-time state field must continue to distinguish pipelines. */
 #define CHECK_KEY_FIELD(field) do { key=s_d3d.vp_fp[0];key.field++; \
     if(!port_find_fp_pso(&key)) misses++;else ok=0; } while(0)
-    CHECK_KEY_FIELD(vs_idx);CHECK_KEY_FIELD(vs_hash);CHECK_KEY_FIELD(gen);
+    CHECK_KEY_FIELD(vs_hash);CHECK_KEY_FIELD(gen);
     CHECK_KEY_FIELD(blend);CHECK_KEY_FIELD(nrt);CHECK_KEY_FIELD(rtfmt);
     CHECK_KEY_FIELD(exp32);CHECK_KEY_FIELD(ucode_hash);CHECK_KEY_FIELD(cmask);
     CHECK_KEY_FIELD(cull);CHECK_KEY_FIELD(cube_mask);CHECK_KEY_FIELD(depth_key);
@@ -294,6 +353,17 @@ int port_check_pipeline_cache(void)
         snprintf(path,sizeof(path),"%s/vs_%08X.ucode",capdir,hash);
         f=fopen(path,"wb");if(f) { fwrite(vuc,16,(size_t)ni,f);fclose(f); }
     }''')
+    replace('    HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_vp2", NULL, NULL,', r'''    static unsigned vp_compile_seq;
+    unsigned vp_seq=++vp_compile_seq;
+    const char* vp_trace=getenv("PORT_RENDER_TRACE");
+    unsigned vp_trace_limit=vp_trace && atoi(vp_trace)>1 ? (unsigned)atoi(vp_trace) : 128u;
+    int vp_tracing=vp_trace && vp_seq<=vp_trace_limit;
+    ULONGLONG vp_started=GetTickCount64();
+    if(vp_tracing) fprintf(stderr,"[RENDER] VS compile begin seq=%u hash=%08X instrs=%d\n",vp_seq,hash,ni);
+    HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_vp2", NULL, NULL,''')
+    replace('"main", "vs_5_0", 0, 0, &vb, &e);\n    if (e)',
+            '"main", "vs_5_0", 0, 0, &vb, &e);\n'
+            '    if(vp_tracing) fprintf(stderr,"[RENDER] VS compile end seq=%u ms=%llu hr=%08lX\\n",vp_seq,GetTickCount64()-vp_started,(unsigned long)hr);\n    if (e)')
     replace('        /* Per-draw VP constant banks for the first few offscreen-RT geometry',r'''        /* Capture uploaded inputs for a few scene draws. cb_slot, rather
          * than draw index, is authoritative when adjacent batches merge. */
         if (s_d3d.vp_cb_mapped && s_d3d.vp_vb_mapped) {
@@ -425,16 +495,18 @@ int port_check_vertex_cache(void)
         }
     }
     int capacity=s_d3d.vp_vs_capacity;
-    /* Once the batch is retired, reuse an unpinned slot without moving the
-     * one still referenced by the next batch. */
-    s_d3d.draw_count=1;
-    s_d3d.draws[0].vs_idx=1;s_d3d.draws[0].vs_hash=s_d3d.vp_vs[1].hash;
-    s_d3d.vp_vs_n=s_d3d.vp_vs_capacity;
+    /* Retirement must not throw away bytecode needed again next frame. Fill
+     * the allocation, then introduce another program with no draws pinned. */
+    s_d3d.draw_count=0;
+    while(s_d3d.vp_vs_n<capacity) {
+        int slot=vp_reserve_vs_slot();s_d3d.vp_vs[slot].hash=100+slot;
+    }
     int slot=vp_reserve_vs_slot();
-    if(slot==1 || s_d3d.vp_vs_capacity!=capacity ||
-       s_d3d.vp_vs[1].hash!=s_d3d.draws[0].vs_hash) ok=0;
-    fprintf(stderr,"[compat-check] vertex cache pending bindings=35 stable=%d retired-slot reuse=%d %s\n",ok,slot!=1,ok?"PASS":"FAIL");
-    free(s_d3d.vp_vs);s_d3d.vp_vs=NULL;s_d3d.vp_vs_n=0;s_d3d.vp_vs_capacity=0;
+    int retained=slot==capacity && s_d3d.vp_vs_capacity>capacity;
+    for(int i=0;i<capacity;i++) if(s_d3d.vp_vs[i].hash!=100u+(unsigned)i) retained=0;
+    ok=ok && retained;
+    fprintf(stderr,"[compat-check] vertex cache pending bindings=35 stable=%d retired-programs-retained=%d %s\n",ok,retained,ok?"PASS":"FAIL");
+    port_release_vs_cache();
     memset(s_d3d.draws,0,sizeof(s_d3d.draws));s_d3d.draw_count=0;
     return ok?0:1;
 }
@@ -511,44 +583,7 @@ int port_check_vertex_constants(void)
     }
     const u32 key_off = off;         /* lookup key: the offset as bound */''')
     text=prepare_texture_units(text)
-    text+=r'''
-/* CPU contract: exercise the actual clear boundary with real flip requests.
- * D3D12 remains uninitialized; no GPU work or completion is synthesized. */
-extern s32 cellGcmSetDisplayBuffer(u32,u32,u32,u32,u32);
-extern s32 cellGcmSetFlipCommand(u32);
-int port_check_present_boundary(void)
-{
-    if(s_d3d.initialized || s_d3d.draw_count) return 2;
-    if(cellGcmSetDisplayBuffer(0,0,5120,1280,720)) return 2;
-    memset(s_d3d.draws,0,sizeof(s_d3d.draws));
-    s_d3d.draw_count=135;
-    if(cellGcmSetFlipCommand(0)) return 2;
-    d3d12_clear(NULL,0,0,1.0f,0);
-    int large=s_d3d.draw_count==0;
-    s_d3d.draw_count=1;
-    d3d12_clear(NULL,0,0,1.0f,0);
-    int duplicate_held=s_d3d.draw_count==1;
-    if(cellGcmSetFlipCommand(0)) return 2;
-    d3d12_clear(NULL,0,0,1.0f,0);
-    int one_draw=s_d3d.draw_count==0;
-    unsigned released=0;
-    for(unsigned i=0;i<65;i++) {
-        s_d3d.draw_count=1;
-        if(cellGcmSetFlipCommand(0)) return 2;
-        d3d12_clear(NULL,0,0,1.0f,0);
-        if(!s_d3d.draw_count) released++;
-    }
-    s_d3d.draw_count=1;s_d3d.draws[0].rt_off=0x440000;
-    if(cellGcmSetFlipCommand(0)) return 2;
-    d3d12_clear(NULL,0,0,1.0f,0);
-    int offscreen_held=s_d3d.draw_count==1;
-    int ok=large && duplicate_held && one_draw && released==65 && offscreen_held;
-    fprintf(stderr,"[compat-check] presentation boundary: large=%d duplicate-held=%d one-draw=%d successive=%u/65 offscreen-held=%d: %s\n",
-        large,duplicate_held,one_draw,released,offscreen_held,ok?"PASS":"FAIL");
-    memset(s_d3d.draws,0,sizeof(s_d3d.draws));s_d3d.draw_count=0;
-    return ok?0:1;
-}
-'''
+    text=prepare_frame_boundaries(text)
     def include(m):
         path=source.parent/m[1]
         return '#include "'+path.resolve().as_posix()+'"' if path.is_file() else m[0]
