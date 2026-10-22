@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.24)
 project(DrakengardRecompile
     VERSION 0.1.0
     LANGUAGES C CXX
@@ -297,6 +297,13 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ps3recomp_runtime
 )
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/GamepadSDL.cmake")
+target_link_libraries(${PROJECT_NAME} PRIVATE "$<LINK_ONLY:SDL2::SDL2-static>")
+set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/cellPad_compat.c" APPEND
+    PROPERTY COMPILE_DEFINITIONS PS3RECOMP_PAD_USE_SDL2 SDL_MAIN_HANDLED)
+set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/cellPad_compat.c" APPEND
+    PROPERTY INCLUDE_DIRECTORIES "$<TARGET_PROPERTY:SDL2::SDL2-static,INTERFACE_INCLUDE_DIRECTORIES>")
 
 # Link the C++ runtime even when the generated entry units are C.
 set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE CXX)
