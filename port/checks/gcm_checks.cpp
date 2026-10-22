@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <initializer_list>
+#include <cstring>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 extern "C" void port_gcm_contract_begin(uint32_t);
@@ -91,6 +92,39 @@ extern "C" int port_check_fifo_flip_boundary()
         fprintf(stderr,"[compat-check] FIFO flip %04X: next-frame-held=%d resumed=%d %s\n",
             method,stopped,resumed,stopped&&resumed?"PASS":"FAIL");
         ok=ok&&stopped&&resumed;
+    }
+    // A guest flip can leave a fence in the old ring tail. Neither that tail
+    // nor commands beyond the published PUT may be discarded by host recycle.
+    {
+        constexpr uint32_t ea=0x60000000,context=ea+0x80000,end=ea+0x40000;
+        uint32_t control=ppu_hle_inject_base+0x2000,label=ppu_hle_inject_base+0xFF0;
+        port_gcm_contract_begin(ea);
+        port_gcm_contract_default_context(context);
+        vm_write32(context,ea);vm_write32(context+4,end);vm_write32(context+8,end);
+        // Exercise the existing safely drained overrun path to enable its
+        // near-end policy, just as a long-running title does before the stall.
+        cellGcm_rsx_process_fifo();
+        extern unsigned char* vm_base;
+        memset(vm_base+ea,0,0x40000);
+        vm_write32(context+8,end-8);
+        vm_write32(label,0);
+        constexpr uint32_t flip=0x20000;
+        vm_write32(ea+flip,0x0004E924);vm_write32(ea+flip+4,0);
+        vm_write32(ea+flip+8,0x00041D6C);vm_write32(ea+flip+12,0xFF0);
+        vm_write32(ea+flip+16,0x00041D70);vm_write32(ea+flip+20,0x00660400);
+        vm_write32(control,flip+24);
+        cellGcm_rsx_process_fifo();
+        bool tail=port_gcm_contract_get()==flip+8 && vm_read32(control)==flip+24 && vm_read32(label)==0;
+        cellGcm_rsx_process_fifo();
+        bool unpublished=port_gcm_contract_get()==flip+24 && vm_read32(context+8)==end-8 && vm_read32(label)==0x466;
+        // Once the producer publishes those remaining NOPs and the owner reads
+        // them, recycling is safe and still has to work.
+        vm_write32(control,0x40000-8);
+        cellGcm_rsx_process_fifo();
+        bool recycled=port_gcm_contract_get()==0 && vm_read32(context+8)==ea && vm_read32(label)==0x466;
+        fprintf(stderr,"[compat-check] FIFO recycle: flip-tail-held=%d unpublished-held=%d drained-recycled=%d %s\n",
+            tail,unpublished,recycled,tail&&unpublished&&recycled?"PASS":"FAIL");
+        ok=ok&&tail&&unpublished&&recycled;
     }
     return ok?0:1;
 }

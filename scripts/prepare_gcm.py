@@ -47,6 +47,15 @@ def prepare(sdk, output):
 }
 '''+text[end:]
     text='void port_renderer_submit_pending(void);\n'+text
+    old='''        if (begin && end > begin && cur >= begin && cur + GCM_RECYCLE_SLACK >= end
+                && head_consumed && s_title_overran) {'''
+    if text.count(old)!=1: raise ValueError('Pinned ring recycle guard changed')
+    text=text.replace(old,'''        /* The write head can include unpublished commands. A flip also leaves
+         * the next frame queued on purpose. Never teleport GET past either:
+         * all produced bytes must have been published AND actually consumed. */
+        if (begin && end > begin && cur >= begin && cur + GCM_RECYCLE_SLACK >= end
+                && head_consumed && s_title_overran && s_fifo_getoff == put
+                && gcm_ea2io(cur) == put) {''')
     for old,new in (
         ('else if (m == 0x6Cu) vm_write32(la, v);',
          'else if (m == 0x6Cu) { port_renderer_submit_pending(); vm_write32(la, v); }'),
