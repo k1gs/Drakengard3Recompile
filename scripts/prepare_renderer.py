@@ -3,6 +3,7 @@ import re
 from prepare_texture_units import prepare as prepare_texture_units
 from prepare_frame_boundaries import prepare as prepare_frame_boundaries
 from prepare_texture_cache import prepare as prepare_texture_cache
+from prepare_vertex_fetch import prepare as prepare_vertex_fetch
 
 
 def prepare(sdk, output):
@@ -606,6 +607,10 @@ int port_check_vertex_constants(void)
         }
     }
     const u32 key_off = off;         /* lookup key: the offset as bound */''')
+    replace('static void read_vp_vertex(const rsx_state* state, u32 vi, VPSlot* out16)',
+            prepare_vertex_fetch(sdk)+'\nstatic void read_vp_vertex(const rsx_state* state, u32 vi, VPSlot* out16)')
+    replace('rsx_fetch_attrib(state, i, vi, out16[i].v);',
+            'port_fetch_attrib(state, i, vi, out16[i].v);')
     text=prepare_texture_units(text)
     text=prepare_texture_cache(text)
     text=prepare_frame_boundaries(text)
