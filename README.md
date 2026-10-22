@@ -63,14 +63,11 @@ Captures from the native Windows build. These show rendering milestones; they do
 
 *The title screen, captured at approximately 29 FPS during an earlier test.*
 
-<details>
-<summary>Movie playback - native YUV rendering</summary>
+**Movie playback**
 
 ![Native movie rendering](assets/screenshots/native-movie-frame.png)
 
 *Video rendered from its YUV textures. Correcting framebuffer feedback removed persistent silhouettes and overlapping subtitles from this path.*
-
-</details>
 
 ## Getting started
 
