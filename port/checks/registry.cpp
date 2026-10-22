@@ -16,6 +16,7 @@ extern "C"
     int port_check_vertex_cache();
     int port_check_pipeline_cache();
     int port_check_texture_units();
+    int port_check_texture_cache();
     int port_check_msdsp();
     int port_check_audio_decoder();
     int port_check_fragment_constants();
@@ -55,6 +56,7 @@ const Check checks[] = {
     {"--check-vertex-cache", port_check_vertex_cache},
     {"--check-pipeline-cache", port_check_pipeline_cache},
     {"--check-texture-units", port_check_texture_units},
+    {"--check-texture-cache", port_check_texture_cache},
     {"--check-msdsp", port_check_msdsp},
     {"--check-audio-decoder", port_check_audio_decoder},
     {"--check-fragment-constants", port_check_fragment_constants},

@@ -2,6 +2,7 @@
 import re
 from prepare_texture_units import prepare as prepare_texture_units
 from prepare_frame_boundaries import prepare as prepare_frame_boundaries
+from prepare_texture_cache import prepare as prepare_texture_cache
 
 
 def prepare(sdk, output):
@@ -606,6 +607,7 @@ int port_check_vertex_constants(void)
     }
     const u32 key_off = off;         /* lookup key: the offset as bound */''')
     text=prepare_texture_units(text)
+    text=prepare_texture_cache(text)
     text=prepare_frame_boundaries(text)
     def include(m):
         path=source.parent/m[1]
