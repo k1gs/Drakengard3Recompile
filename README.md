@@ -1,55 +1,78 @@
 <div align="center">
 
-# Drakengard 3 Recompile
+# Drakengard 3
 
-**Bringing Drakengard 3 to Windows through native static recompilation.**
+### Native Windows port through static recompilation
 
-![Platform: Windows x64](https://img.shields.io/badge/platform-Windows_x64-0078D4?style=flat-square)
-![Approach: Static recompilation](https://img.shields.io/badge/approach-static_recompilation-8B1E2D?style=flat-square)
-![Status: In development](https://img.shields.io/badge/status-in_development-D99A24?style=flat-square)
+A source-only project building toward a complete, playable PC version of **Drakengard 3**.
 
-[Progress](#current-status) В· [Screenshots](#rendering-progress) В· [Build](#building) В· [Controls](#test-controls)
+![Source: PlayStation 3](https://img.shields.io/badge/source-PlayStation_3-003791)
+![Target: Windows x64](https://img.shields.io/badge/target-Windows_x64-0078D4)
+![Game: NPUB31251 v1.01](https://img.shields.io/badge/game-NPUB31251_v1.01-6750A4)
+![Stage: Active development](https://img.shields.io/badge/stage-active_development-D97706)
+
+[Progress](#progress) &middot; [Screenshots](#rendering-progress) &middot; [Getting started](#getting-started) &middot; [Controls](#test-controls) &middot; [Contributing](#contributing)
 
 </div>
 
-## The goal
+> **Native port in development. Gameplay with working controls is not yet confirmed.**
+> The Windows executable renders the intro, plays audio and reaches the main menu.
+> New game loading now passes the previous SPURS initialization failure and reaches
+> a story scene with advancing subtitles. Rendering stability and performance beyond
+> menus remain active work.
 
-A complete, playable native Windows recompilation of **Drakengard 3**. The project translates the PS3 executable into native code and replaces platform services where needed, with as much native execution and as little PS3 compatibility machinery as possible.
+## The project
 
-Development currently targets **NPUB31251 v1.01**. You supply the original game files; this repository contains the port's source, tools, and checks.
+The goal is a complete, playable native Windows recompilation of **Drakengard 3**.
+The project translates the PS3 executable into native code and replaces platform
+services where needed, with as much native execution and as little PS3 compatibility
+machinery as possible. **Windows x64 is the target platform.**
 
-## Current status
+Development currently targets **NPUB31251, version 1.01**. You supply the original game
+files; this repository contains the port's source, preparation tools and checks.
+Generated game code and local research notes stay outside version control.
 
-| Milestone | Progress |
-| --- | --- |
-| Native executable | PPU recompilation and embedded SPU modules run on Windows |
-| Intro and audio | Rendering and playback confirmed; tested movie sections reach about 30 FPS |
-| Title and main menu | Reached through normal keyboard input |
-| New game loading | Passed the previous task initialization failure and reached a story scene with advancing subtitles |
-| Playable gameplay | Not yet confirmed |
-| Controllers | XInput backend; Switch-mode 8BitDo support is pending |
+## Progress
 
-The latest loading fix preserves the shared taskset argument during SPURS initialization. Previously it was discarded, leaving a task's memory allocator with a zero base. The corrected run continued past that failure during a bounded, hidden five-minute test.
+| Area | Verified milestone | Remaining work |
+| --- | --- | --- |
+| Recompilation & runtime | PPU code and embedded SPU modules execute natively on Windows | Broader runtime and game compatibility |
+| Intro & audio | Rendering and playback confirmed; tested movie sections reach about 30 FPS | Validate later playback and transitions |
+| Title & menus | Title screen and main menu reached through normal keyboard input | Rendering stability and extended interaction |
+| New game loading | Corrected taskset initialization; reached a story scene with advancing subtitles | Validate subsequent transitions and loading times |
+| Input | Keyboard test controls and an XInput backend | Physical controller validation and Switch-mode 8BitDo support |
+| Gameplay & performance | A later scene continues rendering after a Start request | Confirm gameplay with control and improve performance beyond menus |
 
-**Work continues on rendering stability, loading times, performance beyond menus, and gameplay controls.** A later scene measured roughly 5вЂ“6 FPS with diagnostic tracing enabled; this is not a normal-build gameplay benchmark. The latest verified checkpoint passed **26 native checks and 25 portable tests**. The optional native audio decoder remains disabled by default.
+The latest loading fix preserves the shared taskset argument during SPURS initialization.
+Previously it was discarded, leaving a task's memory allocator with a zero base.
+A bounded, hidden five-minute test continued past that failure after the correction.
+
+The latest verified checkpoint passed **26 native checks and 25 portable tests**.
+These validate specific runtime contracts and tooling; they do not establish complete
+game compatibility. A later scene measured roughly **5-6 FPS with diagnostic tracing
+enabled**, which is not a normal-build gameplay benchmark. The optional native audio
+decoder remains disabled by default.
 
 ## Rendering progress
 
 Captures from the native Windows build. These show rendering milestones; they do not establish gameplay readiness.
 
-### Title screen
+**Title screen**
 
 ![Drakengard 3 title screen](assets/screenshots/native-title-screen.png)
 
 *The title screen, captured at approximately 29 FPS during an earlier test.*
 
-### Movie playback
+<details>
+<summary>Movie playback - native YUV rendering</summary>
 
 ![Native movie rendering](assets/screenshots/native-movie-frame.png)
 
 *Video rendered from its YUV textures. Correcting framebuffer feedback removed persistent silhouettes and overlapping subtitles from this path.*
 
-## Building
+</details>
+
+## Getting started
 
 **A fresh clone alone cannot build or run the game.** Building also requires your own game files and locally generated PPU/SPU sources, which are excluded from Git.
 
@@ -100,8 +123,7 @@ RPCS3 is used locally for reference runs. Firmware, accounts, licenses, and game
 Tests run **hidden by default** and close automatically at the requested time limit. Use a fresh Run ID for each test:
 
 ```powershell
-.\scripts
-un-game.ps1 -Run keyboard-test-001 -Seconds 300 -SkipIntro -CaptureFrames -KeyboardOnly
+.\scripts\run-game.ps1 -Run keyboard-test-001 -Seconds 300 -SkipIntro -CaptureFrames -KeyboardOnly
 ```
 
 Add `-Interactive` to open a visible window. Focus it before using the keyboard; **F12** closes an interactive test. Rendering stability is still being investigated, so hidden captures remain the default.
@@ -121,7 +143,7 @@ Add `-Interactive` to open a visible window. Focus it before using the keyboard;
 
 `-SkipIntro` (alias `-SkipMovies`) requests skips through ordinary Start presses while full-screen YUV movies are detected. It releases Start between presses and stops when movie frames stop arriving. The game decides whether a scene is skippable; menus receive no automatic confirmation presses. Engine-rendered scenes require manual input.
 
-## Repository layout
+## Project layout
 
 | Directory | Purpose |
 | --- | --- |
@@ -133,4 +155,27 @@ Add `-Interactive` to open a visible window. Focus it before using the keyboard;
 
 Local `input/`, `work/`, `tools/`, `build/`, `reports/`, and research notes stay outside version control. Game images, DLC, licenses, keys, memory dumps, and generated game code must remain local.
 
-[GitHub repository](https://github.com/k1gs/Drakengard3Recompile) В· [Original GitLab repository](https://gitlab.thebakerc.at/k1gs/drakengard-recompile)
+## Contributing
+
+Focused work on native execution, rendering, platform services, input and regression
+checks is welcome. For runtime reports, include the commit, game revision, reproduction
+steps, first failure and relevant performance measurements. Distinguish intro, menu,
+loading and gameplay results.
+
+Changes should implement the real operation and demonstrate its failure cases.
+Unsupported behavior must remain visible rather than being reported as successful
+completion. Keep game files, generated game code, saves, memory dumps and raw captures
+out of issues and patches.
+
+## Source-only distribution
+
+This repository distributes project source, tooling, tests and selected screenshots.
+It includes **no game files, original executables, game licenses, keys or generated game
+code**. Supply your own local inputs and keep them in ignored directories.
+
+External source components retain their respective licenses. See the notices alongside
+them, including [the ps3recomp runtime notice](port/LICENSE.ps3recomp.txt).
+
+[GitHub repository](https://github.com/k1gs/Drakengard3Recompile) &middot; [Original GitLab repository](https://gitlab.thebakerc.at/k1gs/drakengard-recompile)
+
+*Independent, unofficial project. Not affiliated with the game's rights holders.*
