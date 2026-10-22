@@ -27,6 +27,10 @@ extern "C"
     int port_check_fifo_flip_boundary();
     int port_check_prepare_flip();
     int port_check_spu_interpreter_halt();
+    int port_check_spu_task_null_branch();
+    int port_check_spu_task_replay();
+    int port_check_task_write_watch();
+    int port_check_taskset_arguments();
 }
 
 namespace
@@ -37,6 +41,8 @@ struct Check
     int (*run)();
 };
 const Check checks[] = {
+    {"--check-taskset-arguments", port_check_taskset_arguments},
+    {"--check-task-write-watch", port_check_task_write_watch},
     {"--check-movie-skip", port_check_movie_skip},
     {"--check-present-boundary", port_check_present_boundary},
     {"--check-lwcond", port_check_lwcond_layout},
@@ -60,11 +66,18 @@ const Check checks[] = {
     {"--check-fifo-flip-boundary", port_check_fifo_flip_boundary},
     {"--check-prepare-flip", port_check_prepare_flip},
     {"--check-spu-interpreter-halt", port_check_spu_interpreter_halt},
+    {"--check-spu-task-null-branch", port_check_spu_task_null_branch},
 };
 } // namespace
 
 bool port_run_check(const char *argument, int &result)
 {
+    // This diagnostic needs private captures and is not an asset-free check.
+    if (std::strcmp(argument, "--replay-spu-task") == 0)
+    {
+        result = port_check_spu_task_replay();
+        return true;
+    }
     if (std::strcmp(argument, "--list-checks") == 0)
     {
         for (const auto &check : checks)

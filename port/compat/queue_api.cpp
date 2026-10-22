@@ -5,6 +5,7 @@
 #include <map>
 #include <mutex>
 #include <cstring>
+#include <array>
 #include "win32_compat.h"
 #include "spu_context.h"
 extern "C" uint32_t vm_read32(uint64_t);
@@ -17,6 +18,25 @@ extern "C" uint8_t* vm_base;
 extern "C" [[noreturn]] void port_compatibility_blocker(const char*);
 static std::mutex trace_lock;
 static std::map<uint32_t,unsigned> calls;
+static std::array<uint8_t,0x40000> task_input_ls,task_output_ls;
+static unsigned task_started,task_finished;
+static uint32_t trace_be32(const uint8_t* p) {
+    return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
+}
+extern "C" void port_task_arm_current_watch();
+extern "C" void port_task_result_trace(int finished,int image,uint32_t taskset,uint32_t slot,
+                                      const uint8_t* info,const uint8_t* ls,int rc)
+{
+    if(!finished && taskset) port_task_arm_current_watch();
+    static const bool enabled=std::getenv("PORT_TASK_RESULT_TRACE")!=nullptr;
+    if(!enabled || !taskset || image!=55 || trace_be32(info)!=0x01AB3F00) return;
+    std::lock_guard<std::mutex> lock(trace_lock);
+    if(finished) { ++task_finished;memcpy(task_output_ls.data(),ls,task_output_ls.size()); }
+    else { ++task_started;memcpy(task_input_ls.data(),ls,task_input_ls.size()); }
+    fprintf(stderr,"[task-result] t=%llu %s image=%d taskset=%08X slot=%u started=%u finished=%u rc=%d pop=%08X push=%08X\n",
+        (unsigned long long)GetTickCount64(),finished?"end":"begin",image,taskset,slot,
+        task_started,task_finished,rc,vm_read32(0x01AB3F00),vm_read32(0x01AB3F04));
+}
 struct LFConsumer { uint32_t taskset, task; };
 static std::map<uint32_t,LFConsumer> lf_consumers;
 static uint16_t lf_read16(uint32_t ea) { return (uint16_t)((vm_base[ea]<<8)|vm_base[ea+1]); }
@@ -35,6 +55,12 @@ extern "C" void port_lf_register_consumer(uint32_t q,uint32_t taskset,uint32_t t
 extern "C" void spu_taskset_signal_task(uint32_t,uint32_t);
 extern "C" void port_lf_atomic_trace(spu_context* ctx,uint32_t ea,const uint8_t* line)
 {
+    static const bool task_trace=std::getenv("PORT_TASK_RESULT_TRACE")!=nullptr;
+    if(task_trace && ea==0x01AB3F00) {
+        std::lock_guard<std::mutex> lock(trace_lock);
+        fprintf(stderr,"[task-result-commit] image=%d pc=%05X lr=%05X pop=%08X push=%08X\n",
+            ctx->image_id,ctx->pc,ctx->gpr[0]._u32[0],trace_be32(line),trace_be32(line+4));
+    }
     static const bool enabled=std::getenv("PORT_LF_TRACE")!=nullptr;
     if(!enabled || ctx->image_id!=42) return;
     std::lock_guard<std::mutex> lock(trace_lock);
@@ -111,6 +137,26 @@ static void pop_body(ppu_context* ctx)
                         level,stack,vm_read32((uint64_t)stack+20),next);
                     if(next<=stack || next-stack>0x100000) break;
                     stack=next;
+                }
+                if(q==0x01AB3F00 && std::getenv("PORT_TASK_RESULT_TRACE")) {
+                    uint32_t root=(uint32_t)ctx->gpr[18];
+                    fprintf(stderr,"[task-result-wait] root=%08X r16=%08X r19=%08X r27=%08X\n",
+                        root,(uint32_t)ctx->gpr[16],(uint32_t)ctx->gpr[19],(uint32_t)ctx->gpr[27]);
+                    if(root>=0x10000 && root<0xFFFFF000u) {
+                        fprintf(stderr,"[task-result-wait] root380..3AC:");
+                        for(unsigned off=0x380;off<=0x3AC;off+=4) fprintf(stderr," %08X",vm_read32((uint64_t)root+off));
+                        fprintf(stderr,"\n");
+                    }
+                    static bool dumped;
+                    if(!dumped) {
+                        std::lock_guard<std::mutex> lock(trace_lock);
+                        dumped=true;
+                        for(unsigned i=0;i<2;i++) {
+                            FILE* f=fopen(i?"task-result-output-ls.bin":"task-result-input-ls.bin","wb");
+                            if(f) { const auto& bytes=i?task_output_ls:task_input_ls;fwrite(bytes.data(),1,bytes.size(),f);fclose(f); }
+                        }
+                        fprintf(stderr,"[task-result-wait] saved last LS pair started=%u finished=%u\n",task_started,task_finished);
+                    }
                 }
             }
             logged=now;

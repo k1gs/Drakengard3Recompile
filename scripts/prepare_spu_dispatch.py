@@ -13,6 +13,24 @@ def prepare(sdk, output):
         source = sdk / 'runtime/spu' / (name + '.c')
         text = source.read_text(encoding='utf-8')
         if name == 'spu_channels':
+            anchor='    if (channel_is_mfc(channel)) {\n        /* Atomic line ops'
+            text = replace_once(text, anchor,
+                '    if (channel_is_mfc(channel)) {\n'
+                '        if(channel==MFC_Cmd) port_task_dma_context(ctx);\n        /* Atomic line ops')
+            text = 'void port_task_dma_context(spu_context*);\n' + text
+            text = replace_once(text,
+                '    uint32_t lsa = (uint32_t)(ls - ctx->ls);',
+                '    port_task_dma_trace(ctx,ea,ls,size);\n'
+                '    uint32_t lsa = (uint32_t)(ls - ctx->ls);')
+            text = 'void port_task_dma_trace(spu_context*,uint32_t,const uint8_t*,uint32_t);\n' + text
+            text = replace_once(text,
+                '        memcpy(ls, mem, MFC_ATOMIC_LINE);              /* line -> local store */',
+                '        memcpy(ls, mem, MFC_ATOMIC_LINE);              /* line -> local store */\n'
+                '        port_task_dma_trace(ctx,ea,ls,MFC_ATOMIC_LINE);')
+            text = replace_once(text, '    ctx->pc &= SPU_LS_MASK;',
+                '    ctx->pc &= SPU_LS_MASK;\n'
+                '    /* Image 55 text starts at 0x3000; zero is missing policy memory. */\n'
+                '    if(ctx->image_id==55 && !ctx->pc) port_spu_branch_missing(ctx);')
             text = replace_once(text, 'static uint64_t spu_host_ns(void)\n{', r'''/* Differential fixtures control time on their own thread only. Normal
  * execution never installs this callback and keeps the actual host clock. */
 static _Thread_local uint64_t (*port_test_clock)(void);
@@ -47,6 +65,23 @@ static uint64_t spu_host_ns(void)
             old = '    ctx->status = SPU_STATUS_STOPPED_BY_HALT;\n}\n\n/* ===========================================================================\n * Execution trace'
             text = replace_once(text, old, old.replace('ctx->status = SPU_STATUS_STOPPED_BY_HALT;', 'port_spu_branch_missing(ctx);'))
         elif name == 'spu_dispatch_mt':
+            text = replace_once(text, '    uint32_t pc = ctx->pc & SPU_LS_MASK;', r'''    uint32_t pc = ctx->pc & SPU_LS_MASK;
+    if(ctx->image_id==55) {
+        static _Thread_local unsigned n;
+        static _Thread_local uint32_t recent[32][3];
+        static _Thread_local int trace=-1;
+        if(trace<0) trace=getenv("PORT_TASK_RESULT_TRACE")!=NULL;
+        if(trace) {
+            recent[n&31][0]=pc;recent[n&31][1]=ctx->gpr[0]._u32[0];recent[n&31][2]=ctx->gpr[1]._u32[0];n++;
+            if(!pc) {
+                fprintf(stderr,"[task-null-branch] recent target/lr/sp:");
+                unsigned count=n<32?n:32;
+                for(unsigned i=n-count;i<n;i++) fprintf(stderr," %05X/%05X/%05X",recent[i&31][0],recent[i&31][1],recent[i&31][2]);
+                fprintf(stderr,"\n");
+            }
+        }
+        if(!pc) port_spu_branch_missing(ctx);
+    }''')
             text = replace_once(text, '    if (!special) {',
                 '    if (!special) {\n'
                 '        spu_dispatch_fn dsp=port_msdsp_lookup(ctx,pc);\n'

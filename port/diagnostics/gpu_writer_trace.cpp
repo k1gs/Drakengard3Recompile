@@ -9,12 +9,24 @@ extern "C" uint32_t vm_read32(uint64_t);
 extern "C" uint32_t port_gcm_io_ea(uint32_t);
 extern "C" uint32_t ppu_prof_resolve_host(void*);
 extern "C" void ppu_dump_guest_stack(ppu_context*,const char*);
+extern "C" void port_task_arm_write_watch(uint64_t,uint32_t);
 static std::mutex trace_mutex;
 static std::map<uint32_t,unsigned> parks;
 static unsigned records=0;
 static bool enabled() { static const bool value=std::getenv("PORT_GPU_WRITERS")!=nullptr; return value; }
 extern "C" void port_gpu_ppu_write(unsigned long long address,unsigned int value,void* caller)
 {
+    if(address==0x01AC39B8) port_task_arm_write_watch(address,value);
+    static const bool task=std::getenv("PORT_TASK_RESULT_TRACE")!=nullptr;
+    if(task && value==0x800 && address>=0x40000000 && address<0xC0000000) {
+        uint32_t base=vm_read32(0x01AC39B8);
+        if(base>=0x40000000 && address>=base && address<base+128) {
+            auto* ctx=g_active_ctx;
+            fprintf(stderr,"[task-pointer-write] ea=%08llX base=%08X old=%08X new=%08X fn=%08X lr=%08llX\n",
+                address,base,vm_read32(address),value,ppu_prof_resolve_host(caller),ctx?(unsigned long long)ctx->lr:0);
+            if(ctx) ppu_dump_guest_stack(ctx,"task-pointer-write");
+        }
+    }
     static const bool chains=std::getenv("PORT_JC_TRACE")!=nullptr;
     if(chains && address>=0x01A2A900 && address<0x01A2B900 && (address&7)==4) {
         uint32_t old=vm_read32(address);

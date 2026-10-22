@@ -49,6 +49,12 @@ def workload(text):
         }
     }'''
     text = once(text, old, new)
+    anchor='            int32_t rc = spu_run_lifted_job_abi(j->fn, ls, j->args_ea, j->image_id,'
+    text = once(text,anchor,
+        '            port_task_result_trace(0,j->image_id,j->taskset_ea,j->taskid,j->taskinfo,ls,0);\n'+anchor)
+    anchor='            fprintf(stderr, "[spu_workload] async image=%d RETURNED rc=%d "'
+    text = once(text,anchor,
+        '            port_task_result_trace(1,j->image_id,j->taskset_ea,j->taskid,j->taskinfo,ls,rc);\n'+anchor)
     # Auto-scheduled tasks use the same claim operation as CreateTask.
     text = once(text, '        run[t / 8] |= m;\n        fprintf(stderr, "[taskset] start task',
         '        fprintf(stderr, "[taskset] start task')
@@ -71,6 +77,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t size, uint32_t ar
 }
 '''
     return ('#include <stdint.h>\n'
+        'void port_task_result_trace(int,int,uint32_t,uint32_t,const uint8_t*,const uint8_t*,int);\n'
         'void port_lf_register_consumer(uint32_t,uint32_t,uint32_t);\n'
         'void port_task_dispatch_blocker(const char*);\n'
         'int port_dispatch_task_locked(const uint8_t*,uint32_t,uint32_t,uint32_t,uint32_t);\n') + text
@@ -79,6 +86,37 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t size, uint32_t ar
 def prepare_spurs(sdk, output):
     source = sdk / 'libs/spurs/cellSpurs.c'
     text = source.read_text(encoding='utf-8')
+    # The taskset argument is a guest BE doubleword, not a host struct field.
+    # The SDK stubs discarded it twice, so task CRTs read their allocator at EA 0.
+    text = once(text, '    (void)attr;\n    return cellSpursCreateTaskset(spurs, taskset, 0, NULL, 0);', r'''    uint32_t ea=(uint32_t)(uintptr_t)attr;
+    if(!ea) return CELL_SPURS_TASK_ERROR_NULL_POINTER;
+    if(ea & 7) return CELL_SPURS_TASK_ERROR_ALIGN;
+    if(vm_read32(ea)!=1) return CELL_SPURS_TASK_ERROR_INVAL;
+    uint64_t args=vm_read64(ea+8);
+    if(getenv("PORT_TASK_RESULT_TRACE"))
+        fprintf(stderr,"[taskset-args] taskset=%08X args=%016llX\n",
+            (uint32_t)(uintptr_t)taskset,(unsigned long long)args);
+    return cellSpursCreateTaskset(spurs,taskset,args,
+        (const u8*)(uintptr_t)(ea+16),vm_read32(ea+24));''')
+    begin=text.index('    (void)sdkVersion; (void)argTaskset; (void)priority; (void)maxContention;',
+                     text.index('s32 _cellSpursTasksetAttributeInitialize('))
+    end=text.index('\n}',begin)
+    text=text[:begin]+r'''    uint32_t ea=(uint32_t)(uintptr_t)attr;
+    uint32_t priorities=(uint32_t)priority;
+    if(!ea || !priorities) return CELL_SPURS_TASK_ERROR_NULL_POINTER;
+    if(ea & 7) return CELL_SPURS_TASK_ERROR_ALIGN;
+    for(unsigned i=0;i<8;i++)
+        if(vm_base[priorities+i]>15) return CELL_SPURS_TASK_ERROR_INVAL;
+    uint8_t saved_priority[8];
+    memcpy(saved_priority,vm_base+priorities,8);
+    memset(vm_base+ea,0,512); // CellSpursTasksetAttribute, including reserved bytes.
+    vm_write32(ea,revision);
+    vm_write32(ea+4,sdkVersion);
+    vm_write64(ea+8,argTaskset);
+    memcpy(vm_base+ea+16,saved_priority,8);
+    vm_write32(ea+24,maxContention);
+    vm_write32(ea+32,6400);
+    return CELL_OK;'''+text[end:]
     # Job return is not an application user-event. The upstream broadcast of
     # monotonically increasing job indices into every attached queue corrupts
     # Drakengard's event-helper slot array (job 321 clears resource table slot 0).

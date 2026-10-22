@@ -16,7 +16,7 @@ foreach ($check in $Checks) {
 
 foreach ($check in $Checks) {
     & $exe $check
-    $expected = if ($check -eq '--check-spu-interpreter-halt') { 8 } else { 0 }
+    $expected = if ($check -in @('--check-spu-interpreter-halt','--check-spu-task-null-branch')) { 8 } else { 0 }
     if ($LASTEXITCODE -ne $expected) {
         throw "$check returned $LASTEXITCODE; expected $expected"
     }
