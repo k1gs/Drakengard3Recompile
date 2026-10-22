@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidateRange(5,300)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001', [switch]$CaptureFrames, [switch]$CaptureRsx, [switch]$Interactive, [switch]$KeyboardOnly, [Alias('SkipIntro')][switch]$SkipMovies, [ValidateRange(1,600)][int]$CaptureCount=12, [ValidateRange(1,3600)][int]$CaptureEvery=120)
+param([ValidateRange(5,500)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001', [switch]$CaptureFrames, [switch]$CaptureRsx, [switch]$Interactive, [switch]$KeyboardOnly, [Alias('SkipIntro')][switch]$SkipMovies, [ValidateRange(1,600)][int]$CaptureCount=12, [ValidateRange(1,3600)][int]$CaptureEvery=120)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $exe = Join-Path $root 'build/game/DrakengardRecompile.exe'
