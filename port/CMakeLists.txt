@@ -78,6 +78,8 @@ message(STATUS "Lifted sources:  ${RECOMP_SOURCE_COUNT} file(s)")
 # imported one arrives without SDL2, pthreads, the Metal frameworks or the
 # Winsock/XInput imports -- the link then fails on every platform for a
 # different reason. add_subdirectory hands all of that over with the target.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/GamepadSDL.cmake")
+
 add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
                  EXCLUDE_FROM_ALL)
 
@@ -296,7 +298,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ps3recomp_runtime
+    SDL2::SDL2-static
 )
+set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/cellPad_compat.c" APPEND
+    PROPERTY COMPILE_DEFINITIONS PS3RECOMP_PAD_USE_SDL2 SDL_MAIN_HANDLED)
 
 # Link the C++ runtime even when the generated entry units are C.
 set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE CXX)

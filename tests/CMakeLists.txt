@@ -1,0 +1,30 @@
+cmake_minimum_required(VERSION 3.20)
+project(GamepadContract C)
+set(CMAKE_C_STANDARD 17)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+if(NOT EXISTS "${PS3RECOMP_DIR}/libs/input/cellPad.c")
+    message(FATAL_ERROR "Set PS3RECOMP_DIR to the ps3recomp SDK checkout")
+endif()
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../port/cmake/GamepadSDL.cmake")
+execute_process(COMMAND "${Python3_EXECUTABLE}" -c
+    "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); from prepare_input import prepare; prepare(Path(sys.argv[2]), Path(sys.argv[3]))"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts" "${PS3RECOMP_DIR}" "${CMAKE_CURRENT_BINARY_DIR}"
+    COMMAND_ERROR_IS_FATAL ANY)
+add_executable(gamepad_contract native_gamepad_contract.c)
+target_include_directories(gamepad_contract PRIVATE "${PS3RECOMP_DIR}/include")
+target_compile_definitions(gamepad_contract PRIVATE PS3RECOMP_PAD_USE_SDL2 SDL_MAIN_HANDLED
+    PORT_CELL_PAD_SOURCE="${CMAKE_CURRENT_BINARY_DIR}/cellPad_compat.c")
+target_link_libraries(gamepad_contract PRIVATE SDL2::SDL2-static)
+if(NOT WIN32)
+    target_link_libraries(gamepad_contract PRIVATE m)
+endif()
+# Assertions are the contract, also in Release builds.
+if(MSVC)
+    target_compile_options(gamepad_contract PRIVATE /UNDEBUG)
+else()
+    target_compile_options(gamepad_contract PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+endif()
+enable_testing()
+add_test(NAME gamepad_contract COMMAND gamepad_contract)
+set_tests_properties(gamepad_contract PROPERTIES TIMEOUT 30)
