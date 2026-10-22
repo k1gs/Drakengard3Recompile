@@ -1,40 +1,114 @@
-# Drakengard 3 — Native Windows Recompilation
+<div align="center">
 
-An experimental native Windows port of Drakengard 3, based on static recompilation of the PS3 executable. The goal is to run as much game code natively as possible, with minimal PS3 compatibility machinery, using game files supplied by the user. The currently analyzed release is NPUB31251 v1.01.
+# Drakengard 3 Recompile
+
+**Bringing Drakengard 3 to Windows through native static recompilation.**
+
+![Platform: Windows x64](https://img.shields.io/badge/platform-Windows_x64-0078D4?style=flat-square)
+![Approach: Static recompilation](https://img.shields.io/badge/approach-static_recompilation-8B1E2D?style=flat-square)
+![Status: In development](https://img.shields.io/badge/status-in_development-D99A24?style=flat-square)
+
+[Progress](#current-status) В· [Screenshots](#rendering-progress) В· [Build](#building) В· [Controls](#test-controls)
+
+</div>
+
+## The goal
+
+A complete, playable native Windows recompilation of **Drakengard 3**. The project translates the PS3 executable into native code and replaces platform services where needed, with as much native execution and as little PS3 compatibility machinery as possible.
+
+Development currently targets **NPUB31251 v1.01**. You supply the original game files; this repository contains the port's source, tools, and checks.
 
 ## Current status
 
-The native executable renders the Unreal intro and plays audio. The project includes a full PPU lift, 40 embedded SPU images, raw SPURS jobs, and 71 additional native functions for the streamed MultiStream DSP plugins. The DSP plugins are selected only when their runtime code matches the verified modules from the user's EBOOT.
+| Milestone | Progress |
+| --- | --- |
+| Native executable | PPU recompilation and embedded SPU modules run on Windows |
+| Intro and audio | Rendering and playback confirmed; tested movie sections reach about 30 FPS |
+| Title and main menu | Reached through normal keyboard input |
+| New game loading | Passed the previous task initialization failure and reached a story scene with advancing subtitles |
+| Playable gameplay | Not yet confirmed |
+| Controllers | XInput backend; Switch-mode 8BitDo support is pending |
 
-**This is not yet a playable port.** Movie playback runs at approximately 30 FPS on the tested machine. The title screen has been visually confirmed by the user, and automated keyboard input reaches the main menu. After presentation fixes, a hidden test recorded approximately 27–30 FPS and 170 menu frames without the previously observed blue artifact or black flashes. Frame updates later stopped; prolonged stability, gameplay, and Switch-mode controllers remain unverified.
+The latest loading fix preserves the shared taskset argument during SPURS initialization. Previously it was discarded, leaving a task's memory allocator with a zero base. The corrected run continued past that failure during a bounded, hidden five-minute test.
 
-The latest local build passed 25 portable tests and 23 native checks, including ordered clears, FIFO flip boundaries, deferred flip callbacks, and native/interpreter DSP comparisons. The experimental audio decoder remains disabled by default. These checks do not establish full game compatibility.
+**Work continues on rendering stability, loading times, performance beyond menus, and gameplay controls.** A later scene measured roughly 5вЂ“6 FPS with diagnostic tracing enabled; this is not a normal-build gameplay benchmark. The latest verified checkpoint passed **26 native checks and 25 portable tests**. The optional native audio decoder remains disabled by default.
 
 ## Rendering progress
 
-Actual captures from the experimental native Windows build. Performance numbers describe these tested intro sections, not gameplay.
-
-### Native movie playback
-
-![Native movie playback after fixing feedback from the previous framebuffer](assets/screenshots/native-movie-frame.png)
-
-The movie now uses its actual YUV video textures. A screen-size heuristic previously replaced the luma texture with the previous rendered frame, causing persistent silhouettes and overlapping subtitles.
+Captures from the native Windows build. These show rendering milestones; they do not establish gameplay readiness.
 
 ### Title screen
 
-![Drakengard 3 title screen with the Start prompt](assets/screenshots/native-title-screen.png)
+![Drakengard 3 title screen](assets/screenshots/native-title-screen.png)
 
-User-provided capture at approximately 29 FPS. The title screen is visible, but overlapping images and flickering in the menu remain unresolved.
+*The title screen, captured at approximately 29 FPS during an earlier test.*
+
+### Movie playback
+
+![Native movie rendering](assets/screenshots/native-movie-frame.png)
+
+*Video rendered from its YUV textures. Correcting framebuffer feedback removed persistent silhouettes and overlapping subtitles from this path.*
+
+## Building
+
+**A fresh clone alone cannot build or run the game.** Building also requires your own game files and locally generated PPU/SPU sources, which are excluded from Git.
+
+Run the environment check from PowerShell in the project root:
+
+```powershell
+.\scripts\doctor.ps1
+```
+
+Once the local tools, game tree, and generated sources are prepared:
+
+```powershell
+.\scripts\build-game.cmd
+.\scripts\check-native.ps1
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+<details>
+<summary><strong>Tool preparation and executable intake</strong></summary>
+
+```powershell
+.\scripts\bootstrap.ps1
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r third_party\ps3recomp\tools\requirements.txt
+.\scripts\build-spu-extension.ps1
+.\scripts\build-runtime.cmd
+.\scripts\check-toolchain.cmd
+.\scripts\check-ghidra.ps1
+.\scripts\start-ghidra.ps1
+```
+
+Bootstrap downloads official archives, records revisions and SHA-256 hashes locally, and checks published binary digests. Portable tools do not change global PATH or Java settings.
+
+For a completed, verified game image or directory, create a fresh intake report:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\inspect_input.py "PATH_TO_COMPLETED_IMAGE_OR_DIRECTORY" --download-complete --hash-all --out reports\intake-001.json
+```
+
+Intake reads metadata and hashes files. It does not extract ISO images or prove image authenticity. Recompilation needs a valid plain main ELF and the game's file tree. For your own SELF files, use RPCS3's documented extraction/decryption workflow before analyzing and lifting the executable.
+
+RPCS3 is used locally for reference runs. Firmware, accounts, licenses, and game files are not included.
+
+</details>
 
 ## Test controls
 
-The executable keeps its render window hidden by default. Visible tests require the explicit `-Interactive` option; F12 closes an interactive test, and the runner enforces the requested time limit. Hidden captures remain the default while rendering stability is investigated.
+Tests run **hidden by default** and close automatically at the requested time limit. Use a fresh Run ID for each test:
 
-Focus the game window before pressing keys. The keyboard is used when no XInput controller is connected. Pass `-KeyboardOnly` to the runner to select it explicitly, even when a controller is connected.
+```powershell
+.\scripts
+un-game.ps1 -Run keyboard-test-001 -Seconds 300 -SkipIntro -CaptureFrames -KeyboardOnly
+```
+
+Add `-Interactive` to open a visible window. Focus it before using the keyboard; **F12** closes an interactive test. Rendering stability is still being investigated, so hidden captures remain the default.
 
 | Keyboard | Game action |
 | --- | --- |
-| Enter / Esc | Start; request a skip in skippable cutscenes |
+| Enter / Esc | Start; request a cutscene skip |
 | Space / Z | Cross / confirm |
 | Backspace / X | Circle / back |
 | Arrow keys | D-pad and left stick |
@@ -43,68 +117,20 @@ Focus the game window before pressing keys. The keyboard is used when no XInput 
 | 1 / 2 | L2 / R2 |
 | Tab | Select |
 
-```powershell
-.\scripts\run-game.ps1 -Run keyboard-test-001 -Seconds 300 -SkipIntro -CaptureFrames -KeyboardOnly
-```
+`-KeyboardOnly` selects keyboard input even when an XInput controller is connected. An 8BitDo in Switch mode is not supported by the current backend.
 
-Choose a fresh Run ID each time. The test runner stops the game at the specified time limit. Cutscene skipping remains under the game's control; these keys send the real Start button, without bypassing game logic. An 8BitDo controller in Switch mode is not supported by the current Windows XInput backend; physical controller testing is pending.
+`-SkipIntro` (alias `-SkipMovies`) requests skips through ordinary Start presses while full-screen YUV movies are detected. It releases Start between presses and stops when movie frames stop arriving. The game decides whether a scene is skippable; menus receive no automatic confirmation presses. Engine-rendered scenes require manual input.
 
-Add `-SkipIntro` (alias: `-SkipMovies`) to request automatic skipping. While the renderer detects a full-screen YUV movie, it sends short Start presses through the normal pad API. It releases Start between presses and stops when video frames stop arriving. This also applies to later prerecorded movies; engine-rendered cutscenes still require manual input. Menus receive no automatic confirmation presses.
+## Repository layout
 
-## Quick start
-
-Run from PowerShell in the project root:
-
-```powershell
-.\scripts\doctor.ps1
-.\scripts\start-ghidra.ps1
-```
-
-Tool preparation and checks:
-
-```powershell
-.\scripts\bootstrap.ps1
-.\scripts\build-spu-extension.ps1
-.\scripts\build-runtime.cmd
-.\scripts\check-toolchain.cmd
-.\scripts\check-ghidra.ps1
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-```
-
-Bootstrap downloads official archives, records revisions and SHA-256 hashes in `reports/`, and checks published digests for binary releases. LLVM is extracted with 7-Zip without running its installer. Global PATH and Java settings are not modified.
-
-Create the Python environment with `python -m venv .venv`, then install the toolkit requirements with `.\.venv\Scripts\python.exe -m pip install -r third_party\ps3recomp\tools\requirements.txt`. Installed versions are recorded in `reports/python-lock.txt`; that file can be passed to `pip install -r` when recreating the environment.
-
-RPCS3 is available locally at `tools/rpcs3/rpcs3.exe` for reference runs. Firmware, accounts, licenses, and game files are not included. Install firmware according to RPCS3's official instructions and provide your own prepared game files before a reference run.
-
-Building the game executable also requires the locally generated PPU and SPU sources. These are intentionally excluded from Git; a fresh clone alone is not sufficient to build or run the game.
-
-## Directories
-
-| Path | Purpose |
+| Directory | Purpose |
 | --- | --- |
-| `input/` | User-supplied files, read-only during analysis |
-| `work/` | Working copies, Ghidra projects, loader/lifter output, and generated code |
-| `reports/` | Tool versions, hashes, build logs, and check results |
-| `third_party/` | External tool source snapshots and their licenses |
-| `tools/` | Portable tools, archives, and Gradle cache |
-| `build/` | Local build output |
-| `docs/` | Local research notes and handoffs (not tracked in Git) |
+| `port/` | Windows runtime, platform compatibility, rendering integration, and native checks |
+| `scripts/` | Preparation, build, analysis, and bounded test runners |
+| `tests/` | Portable tooling tests |
+| `assets/` | Public screenshots |
+| `third_party/` | External source snapshots and their licenses |
 
-The primary repository is [k1gs/Drakengard3Recompile](https://github.com/k1gs/Drakengard3Recompile), on branch `main`. The original [GitLab repository](https://gitlab.thebakerc.at/k1gs/drakengard-recompile) is retained as a separate remote.
+Local `input/`, `work/`, `tools/`, `build/`, `reports/`, and research notes stay outside version control. Game images, DLC, licenses, keys, memory dumps, and generated game code must remain local.
 
-`.gitignore` excludes local research notes, `CURRENT_STATE.md`, local tools, working data, generated game code, crash dumps, and build output. `.gitattributes` defines line endings. The existing GitLab CI configuration runs portable intake/parser tests and requires a runner with container image support. The Windows runtime, Ghidra, and game are checked separately on the local machine.
-
-Do not publish game images, DLC, licenses, keys, memory dumps, or generated game code. Review the files being published explicitly: ignore rules do not protect files already tracked by Git.
-
-## Importing user-supplied game files
-
-First confirm that the download has completed and been verified in the download client. Then run a one-time intake with a fresh report name:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\inspect_input.py "PATH_TO_COMPLETED_IMAGE_OR_DIRECTORY" --download-complete --hash-all --out reports\intake-001.json
-```
-
-The script reads files, computes streaming SHA-256 hashes, identifies ELF/SELF/PKG files, and parses PARAM.SFO. It does not extract ISO images; a full file listing and metadata require a separate extraction into `work/`. It refuses to overwrite a report and detects size or modification-time changes while reading. Its output does not prove download completion or image authenticity.
-
-Recompilation requires a valid plain ELF of the main executable and the game's file tree. For user-owned SELF files, use RPCS3's documented extraction/decryption workflow. Before lifting, inspect the executable's architecture, endianness, TOC, OPD, imports, PRX/SPRX libraries, and embedded SPU modules.
+[GitHub repository](https://github.com/k1gs/Drakengard3Recompile) В· [Original GitLab repository](https://gitlab.thebakerc.at/k1gs/drakengard-recompile)
