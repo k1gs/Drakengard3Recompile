@@ -223,6 +223,7 @@ add_executable(${PROJECT_NAME}
     "${CMAKE_CURRENT_BINARY_DIR}/cellGcmSys_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/cellPad_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/rsx_d3d12_backend_compat.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/rsx_commands_compat.c"
     stubs.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
@@ -356,7 +357,7 @@ endif()
 #   - /bigobj on MSVC. A single lifted file routinely passes the 65,536-section
 #     limit of the default object format.
 if(MSVC)
-    set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/rsx_d3d12_backend_compat.c" PROPERTIES COMPILE_OPTIONS "/w;-O2;-fno-strict-aliasing;-ffp-contract=off")
+    set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/rsx_d3d12_backend_compat.c" "${CMAKE_CURRENT_BINARY_DIR}/rsx_commands_compat.c" PROPERTIES COMPILE_OPTIONS "/w;-O2;-fno-strict-aliasing;-ffp-contract=off")
     set_source_files_properties(${RECOMP_SOURCES} PROPERTIES
         COMPILE_OPTIONS "/w;/bigobj")
 else()

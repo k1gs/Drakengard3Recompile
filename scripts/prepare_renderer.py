@@ -5,6 +5,7 @@ from prepare_frame_boundaries import prepare as prepare_frame_boundaries
 from prepare_texture_cache import prepare as prepare_texture_cache
 from prepare_vertex_fetch import prepare as prepare_vertex_fetch
 from prepare_pipeline_storage import prepare as prepare_pipeline_storage
+from prepare_depth_surfaces import prepare as prepare_depth_surfaces
 
 
 def prepare(sdk, output):
@@ -616,6 +617,13 @@ int port_check_vertex_constants(void)
     text=prepare_texture_cache(text)
     text=prepare_frame_boundaries(text)
     text=prepare_pipeline_storage(text)
+    text=prepare_depth_surfaces(text)
+    # Warning budgets must never hide a later D3D12 validation error.
+    replace('for (UINT64 mi = 0; mi < n && _printed < 80; mi++) {',
+            'for (UINT64 mi = 0; mi < n; mi++) {')
+    replace('if (m && SUCCEEDED(iq->lpVtbl->GetMessage(iq, mi, m, &len))) {',
+            'if (m && SUCCEEDED(iq->lpVtbl->GetMessage(iq, mi, m, &len)) &&\n'
+            '                    (m->Severity<=D3D12_MESSAGE_SEVERITY_ERROR || _printed<80)) {')
     def include(m):
         path=source.parent/m[1]
         return '#include "'+path.resolve().as_posix()+'"' if path.is_file() else m[0]

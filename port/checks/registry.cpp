@@ -13,6 +13,8 @@ extern "C"
     int port_check_spurs_events();
     int port_check_vertex_constants();
     int port_check_depth_state();
+    int port_check_depth_surfaces();
+    int port_check_depth_surfaces_gpu();
     int port_check_vertex_cache();
     int port_check_pipeline_cache();
     int port_check_texture_units();
@@ -58,6 +60,8 @@ const Check checks[] = {
     {"--check-spurs-events", port_check_spurs_events},
     {"--check-vertex-constants", port_check_vertex_constants},
     {"--check-depth-state", port_check_depth_state},
+    {"--check-depth-surfaces", port_check_depth_surfaces},
+    {"--check-depth-surfaces-gpu", port_check_depth_surfaces_gpu},
     {"--check-vertex-cache", port_check_vertex_cache},
     {"--check-pipeline-cache", port_check_pipeline_cache},
     {"--check-texture-units", port_check_texture_units},
