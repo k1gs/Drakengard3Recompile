@@ -4,6 +4,7 @@ from prepare_texture_units import prepare as prepare_texture_units
 from prepare_frame_boundaries import prepare as prepare_frame_boundaries
 from prepare_texture_cache import prepare as prepare_texture_cache
 from prepare_vertex_fetch import prepare as prepare_vertex_fetch
+from prepare_pipeline_storage import prepare as prepare_pipeline_storage
 
 
 def prepare(sdk, output):
@@ -614,6 +615,7 @@ int port_check_vertex_constants(void)
     text=prepare_texture_units(text)
     text=prepare_texture_cache(text)
     text=prepare_frame_boundaries(text)
+    text=prepare_pipeline_storage(text)
     def include(m):
         path=source.parent/m[1]
         return '#include "'+path.resolve().as_posix()+'"' if path.is_file() else m[0]
