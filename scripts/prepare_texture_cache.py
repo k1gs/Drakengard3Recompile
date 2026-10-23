@@ -8,6 +8,10 @@ def prepare(text):
             raise ValueError('Pinned texture-cache anchor changed: ' + old[:90])
         text = text.replace(old, new)
 
+    once('    u32 csum;           /* sparse checksum of the source bytes last uploaded */',
+         '    u64 last_used;      /* host cache access order; never guest time */\n'
+         '    u32 csum;           /* sparse checksum of the source bytes last uploaded */')
+
     once('VPTexSlot             vp_tex[VP_TEX_SLOTS];', 'VPTexSlot*            vp_tex;\n    unsigned             vp_tex_capacity;')
     begin = text.index('/* Distinct textures uploadable per frame.')
     end = text.index('#define VP_TEX_SLOTS 96', begin) + len('#define VP_TEX_SLOTS 96')
@@ -28,13 +32,19 @@ def prepare(text):
         once(old, new)
     once('static int vp_upload_tex_slot(', r'''/* Pick storage only after the complete key lookup has missed. Resources
  * referenced by this submission remain pinned until it has completed. */
+static u64 port_texture_use_clock;
+static void port_texture_touch(VPTexSlot* slot)
+{
+    slot->last_used=++port_texture_use_clock;
+}
+
 static int port_texture_free_slot(const VPTexSlot* slots, unsigned count)
 {
     int reusable=-1;
     for(unsigned i=0;i<count;i++) {
         if(slots[i].used) continue;
         if(!slots[i].res) return (int)i;
-        if(reusable<0) reusable=(int)i;
+        if(reusable<0 || slots[i].last_used<slots[reusable].last_used) reusable=(int)i;
     }
     return reusable;
 }
@@ -66,6 +76,17 @@ int port_check_texture_cache(void)
     slots[2].res=(ID3D12Resource*)&slots[2];
     slots[3].res=(ID3D12Resource*)&slots[3];
     int reuse=port_texture_free_slot(slots,4)==0;
+    VPTexSlot hot[4]={0};
+    for(unsigned i=0;i<4;i++) {
+        hot[i].res=(ID3D12Resource*)&hot[i];port_texture_touch(&hot[i]);
+    }
+    port_texture_touch(&hot[0]); /* Most recent, although first in storage. */
+    hot[1].used=1;             /* Oldest is pinned to the current submission. */
+    int oldest=port_texture_free_slot(hot,4)==2;
+    hot[2].used=1;
+    int oldest_unpinned=port_texture_free_slot(hot,4)==3;
+    hot[3].res=NULL;port_texture_touch(&hot[3]);
+    int empty_before_old=port_texture_free_slot(hot,4)==3;
     for(unsigned i=0;i<4;i++) slots[i].used=1;
     int full=port_texture_free_slot(slots,4)==-1;
     slots[3].res=NULL;
@@ -83,14 +104,18 @@ int port_check_texture_cache(void)
     for(unsigned i=0;i<200 && growth;i++)
         if(pool[i].key!=i+1 || !pool[i].used || pool[i].res!=(ID3D12Resource*)&slots[0]) growth=0;
     free(pool);
-    int ok=empty&&pinned&&reuse&&full&&pinned_empty&&growth;
-    fprintf(stderr,"[compat-check] texture cache empty=%d pinned=%d reuse=%d full=%d pinned-empty=%d growth200=%d %s\n",
-        empty,pinned,reuse,full,pinned_empty,growth,ok?"PASS":"FAIL");
+    int ok=empty&&pinned&&reuse&&full&&pinned_empty&&growth&&oldest&&oldest_unpinned&&empty_before_old;
+    fprintf(stderr,"[compat-check] texture cache empty=%d pinned=%d reuse=%d full=%d pinned-empty=%d growth200=%d oldest=%d oldest-unpinned=%d empty-before-old=%d %s\n",
+        empty,pinned,reuse,full,pinned_empty,growth,oldest,oldest_unpinned,empty_before_old,ok?"PASS":"FAIL");
     return ok?0:1;
 }
 
 static int vp_upload_tex_slot(''')
     once('        if (!c->used && freeslot < 0) freeslot = i;', '')
+    once('            && c->cube == cube) {',
+         '            && c->cube == cube) {\n            port_texture_touch(c);')
+    once('    t->cube = cube; t->used = 1;',
+         '    t->cube = cube; t->used = 1;port_texture_touch(t);')
     once('    /* TEX_OFF_BIAS=1:', '''    if(slot<0) freeslot=port_texture_free_slot(s_d3d.vp_tex,s_d3d.vp_tex_capacity);
     /* TEX_OFF_BIAS=1:''')
     once('    if (slot < 0 && freeslot < 0) return -1;', '''    if (slot < 0 && freeslot < 0) {
