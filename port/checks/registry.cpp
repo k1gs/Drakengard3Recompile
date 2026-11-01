@@ -21,6 +21,7 @@ extern "C"
     int port_check_pipeline_cache();
     int port_check_texture_units();
     int port_check_texture_cache();
+    int port_check_renderer_options();
     int port_check_gamepad();
     int port_check_compressed_vertices();
     int port_check_zero_stride_vertices();
@@ -73,6 +74,7 @@ const Check checks[] = {
     {"--check-pipeline-cache", port_check_pipeline_cache},
     {"--check-texture-units", port_check_texture_units},
     {"--check-texture-cache", port_check_texture_cache},
+    {"--check-renderer-options", port_check_renderer_options},
     {"--check-msdsp", port_check_msdsp},
     {"--check-audio-decoder", port_check_audio_decoder},
     {"--check-fragment-constants", port_check_fragment_constants},

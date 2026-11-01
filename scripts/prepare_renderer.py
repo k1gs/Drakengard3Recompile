@@ -655,6 +655,66 @@ int port_check_vertex_constants(void)
             prepare_vertex_fetch(sdk)+'\nstatic void read_vp_vertex(const rsx_state* state, u32 vi, VPSlot* out16)')
     replace('rsx_fetch_attrib(state, i, vi, out16[i].v);',
             'port_fetch_attrib(state, i, vi, out16[i].v);')
+    # These are launch-time diagnostic options. File triggers remain dynamic;
+    # the renderer thread snapshots environment values on their first use.
+    replace('getenv("RSX_CAP_DIR")','port_renderer_capture_dir()',5)
+    replace('if (!getenv("VP_ATTRS")) return;',
+            'if (!port_renderer_vertex_attrs()) return;')
+    options=r'''
+typedef struct PortRendererOption {
+    const char* value;
+    int initialized;
+} PortRendererOption;
+static const char* port_renderer_option(PortRendererOption* option,const char* name,
+                                       char* (*lookup)(const char*))
+{
+    if(!option->initialized) {
+        option->value=lookup(name);
+        option->initialized=1;
+    }
+    return option->value;
+}
+static const char* port_renderer_capture_dir(void)
+{
+    static PortRendererOption option;
+    return port_renderer_option(&option,"RSX_CAP_DIR",getenv);
+}
+static const char* port_renderer_vertex_attrs(void)
+{
+    static PortRendererOption option;
+    return port_renderer_option(&option,"VP_ATTRS",getenv);
+}
+static unsigned port_option_test_calls;
+static char* port_option_test_value;
+static char* port_option_test_lookup(const char* name)
+{
+    (void)name;port_option_test_calls++;return port_option_test_value;
+}
+int port_check_renderer_options(void)
+{
+    PortRendererOption off={0},on={0};
+    char enabled[]="capture-directory",changed[]="changed";
+    port_option_test_calls=0;port_option_test_value=NULL;
+    int absent=1,present=1,snapshot=1;
+    for(unsigned i=0;i<1000;i++)
+        if(port_renderer_option(&off,"RSX_CAP_DIR",port_option_test_lookup)) absent=0;
+    absent=absent && port_option_test_calls==1;
+    port_option_test_value=enabled;port_option_test_calls=0;
+    for(unsigned i=0;i<1000;i++)
+        if(port_renderer_option(&on,"VP_ATTRS",port_option_test_lookup)!=enabled) present=0;
+    present=present && port_option_test_calls==1;
+    port_option_test_value=changed;
+    if(port_renderer_option(&off,"RSX_CAP_DIR",port_option_test_lookup)!=NULL ||
+       port_renderer_option(&on,"VP_ATTRS",port_option_test_lookup)!=enabled ||
+       port_option_test_calls!=1) snapshot=0;
+    int ok=absent&&present&&snapshot;
+    fprintf(stderr,"[compat-check] renderer options: absent-once=%d enabled-once=%d snapshot=%d %s\n",
+            absent,present,snapshot,ok?"PASS":"FAIL");
+    return ok?0:1;
+}
+
+'''
+    replace('static int perf_on(void)',options+'static int perf_on(void)')
     text=prepare_texture_units(text)
     text=prepare_texture_cache(text)
     text=prepare_frame_boundaries(text)
