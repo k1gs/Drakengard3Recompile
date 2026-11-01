@@ -1,4 +1,6 @@
 #include "ppu_recomp.h"
+#include "gpu_writer_gate.h"
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -14,9 +16,19 @@ static std::mutex trace_mutex;
 static std::map<uint32_t,unsigned> parks;
 static unsigned records=0;
 static bool enabled() { static const bool value=std::getenv("PORT_GPU_WRITERS")!=nullptr; return value; }
+extern "C" {
+int port_gpu_ppu_write_active = std::getenv("PORT_GPU_WRITERS") != nullptr ||
+    std::getenv("PORT_TASK_RESULT_TRACE") != nullptr ||
+    std::getenv("PORT_JC_TRACE") != nullptr ||
+    std::getenv("PORT_RESOURCE_TRACE") != nullptr;
+}
+// Only enabled in the isolated native fixture, before any guest threads exist.
+static bool check_writer_calls;
+static unsigned writer_calls;
 extern "C" void port_gpu_ppu_write(unsigned long long address,unsigned int value,void* caller)
 {
-    if(address==0x01AC39B8) port_task_arm_write_watch(address,value);
+    if(check_writer_calls) ++writer_calls;
+    if(address==port_task_pointer_address) port_task_arm_write_watch(address,value);
     static const bool task=std::getenv("PORT_TASK_RESULT_TRACE")!=nullptr;
     if(task && value==0x800 && address>=0x40000000 && address<0xC0000000) {
         uint32_t base=vm_read32(0x01AC39B8);
@@ -75,4 +87,42 @@ extern "C" void port_gpu_spu_write(unsigned int ea,unsigned int size)
         if(records++<4096) fprintf(stderr,"[gpu-writer] SPU DMA ea=%08X size=%u park=%08X word=%08X\n",ea,size,it->first,vm_read32(it->first));
         ++it;
     }
+}
+
+extern "C" int port_check_gpu_writer_gate()
+{
+    extern void vm_write32(uint64_t,uint32_t);
+    extern void vm_write64(uint64_t,uint64_t);
+    constexpr uint64_t ea=0x60000000;
+    int saved=port_gpu_ppu_write_active;
+    check_writer_calls=true;writer_calls=0;port_gpu_ppu_write_active=0;
+    for(unsigned i=0;i<1000;i++) {
+        vm_write32(ea,i);vm_write64(ea+8,0x1234567800000000ULL+i);
+    }
+    bool skipped=writer_calls==0;
+    bool memory=vm_read32(ea)==999 && vm_read32(ea+8)==0x12345678 && vm_read32(ea+12)==999;
+    writer_calls=0;port_gpu_ppu_write_active=1;
+    vm_write32(ea,1);vm_write64(ea+8,0x2345678900000002ULL);
+    bool enabled_calls=writer_calls==3 && vm_read32(ea+8)==0x23456789 && vm_read32(ea+12)==2;
+    writer_calls=0;port_gpu_ppu_write_active=0;
+    vm_write32(port_task_pointer_address,0);
+    vm_write64(port_task_pointer_address-4,0xAABBCCDD00000001ULL);
+    vm_write64(port_task_pointer_address,0x0000000200000003ULL);
+    vm_write64(port_task_pointer_address+4,0x0000000400000005ULL);
+    bool task=writer_calls==5 && vm_read32(port_task_pointer_address-4)==0xAABBCCDD &&
+        vm_read32(port_task_pointer_address)==2 && vm_read32(port_task_pointer_address+4)==4 &&
+        vm_read32(port_task_pointer_address+8)==5;
+    check_writer_calls=false;
+    auto bench=[&](int active) {
+        port_gpu_ppu_write_active=active;
+        auto start=std::chrono::steady_clock::now();
+        for(unsigned i=0;i<1000000;i++) vm_write32(ea,i);
+        return std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+    };
+    double dispatch_seconds=bench(1),disabled_seconds=bench(0);
+    port_gpu_ppu_write_active=saved;
+    bool ok=skipped&&memory&&enabled_calls&&task;
+    fprintf(stderr,"[compat-check] GPU writer gate launch-active=%d disabled-skips=%d memory=%d enabled-dispatch=%d task32/64-boundaries=%d %s; 1M stores dispatch=%.6fs disabled=%.6fs\n",
+        saved,skipped,memory,enabled_calls,task,ok?"PASS":"FAIL",dispatch_seconds,disabled_seconds);
+    return ok?0:1;
 }

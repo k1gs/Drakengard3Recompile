@@ -51,11 +51,13 @@ def main():
     loader_text='extern "C" void port_trace_ppu_context(void*);\n'+loader_text
     anchor='void vm_write32(uint64_t a, uint32_t v) {'
     if loader_text.count(anchor)!=1: raise ValueError('PPU write trace anchor changed')
-    loader_text=loader_text.replace(anchor,anchor+' port_gpu_ppu_write(a,v,__builtin_return_address(0));')
+    loader_text=loader_text.replace(anchor,anchor+' if(port_gpu_ppu_write32_needed(a)) port_gpu_ppu_write(a,v,__builtin_return_address(0));')
     anchor='void vm_write64(uint64_t a, uint64_t v) {'
     if loader_text.count(anchor)!=1: raise ValueError('PPU 64-bit write trace anchor changed')
-    loader_text=loader_text.replace(anchor,anchor+' port_gpu_ppu_write(a,(unsigned int)(v>>32),__builtin_return_address(0)); port_gpu_ppu_write(a+4,(unsigned int)v,__builtin_return_address(0));')
+    loader_text=loader_text.replace(anchor,anchor+' if(port_gpu_ppu_write64_needed(a)) { port_gpu_ppu_write(a,(unsigned int)(v>>32),__builtin_return_address(0)); port_gpu_ppu_write(a+4,(unsigned int)v,__builtin_return_address(0)); }')
     loader_text='extern "C" void port_gpu_ppu_write(unsigned long long,unsigned int,void*);\n'+loader_text
+    writer_gate=Path(__file__).resolve().parent.parent/'port/diagnostics/gpu_writer_gate.h'
+    loader_text='#include "'+writer_gate.as_posix()+'"\n'+loader_text
     anchor='    } while (0)\n'
     # Notify only after the shared-memory write and coherence publication.
     begin=loader_text.index('#define VM_WRITE_COH(')
