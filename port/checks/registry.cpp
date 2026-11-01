@@ -23,6 +23,7 @@ extern "C"
     int port_check_texture_cache();
     int port_check_renderer_options();
     int port_check_gpu_writer_gate();
+    int port_check_spu_image_cache();
     int port_check_gamepad();
     int port_check_compressed_vertices();
     int port_check_zero_stride_vertices();
@@ -77,6 +78,7 @@ const Check checks[] = {
     {"--check-texture-cache", port_check_texture_cache},
     {"--check-renderer-options", port_check_renderer_options},
     {"--check-gpu-writer-gate", port_check_gpu_writer_gate},
+    {"--check-spu-image-cache", port_check_spu_image_cache},
     {"--check-msdsp", port_check_msdsp},
     {"--check-audio-decoder", port_check_audio_decoder},
     {"--check-fragment-constants", port_check_fragment_constants},

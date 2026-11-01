@@ -18,6 +18,20 @@ def workload(text):
         'port_dispatch_task_locked(vm_base + elf, (uint32_t)sz, ctx, taskset_ea, t);')
     text = once(text, 'int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,\n                                uint32_t args_ea)',
         'static int dispatch_async(const uint8_t* image, uint32_t image_size,\n                                uint32_t args_ea, uint32_t taskset_ea, uint32_t taskid)')
+    old = '''static int dispatch_async(const uint8_t* image, uint32_t image_size,
+                                uint32_t args_ea, uint32_t taskset_ea, uint32_t taskid)
+{
+    if (!image || image_size == 0) return 0;
+
+    uint64_t fp = spu_workload_fingerprint(image, image_size);'''
+    helper = '''static uint64_t port_async_image_fingerprint(const void* image, size_t size) {
+    return port_spu_image_fingerprint(image,size);
+}
+
+'''
+    text = once(text, old, helper+old.replace(
+        'uint64_t fp = spu_workload_fingerprint(image, image_size);',
+        'uint64_t fp = port_async_image_fingerprint(image, image_size);'))
     old = '''    { extern uint32_t g_ydkj_real_taskset_ea, g_ydkj_real_taskid;
       j->taskset_ea = g_ydkj_real_taskset_ea; j->taskid = g_ydkj_real_taskid; }'''
     new = '''    j->taskset_ea = taskset_ea; j->taskid = taskid;
@@ -75,8 +89,13 @@ int port_dispatch_task_locked(const uint8_t* image, uint32_t size, uint32_t args
 int spu_workload_dispatch_async(const uint8_t* image, uint32_t size, uint32_t args) {
     return dispatch_async(image,size,args,0,0);
 }
+/* The fixture exercises the same identity path as the real async dispatcher. */
+uint64_t port_spu_async_contract_fingerprint(const void* image, size_t size) {
+    return port_async_image_fingerprint(image,size);
+}
 '''
-    return ('#include <stdint.h>\n'
+    return ('#include <stdint.h>\n#include <stddef.h>\n'
+        'uint64_t port_spu_image_fingerprint(const void*,size_t);\n'
         'void port_task_result_trace(int,int,uint32_t,uint32_t,const uint8_t*,const uint8_t*,int);\n'
         'void port_lf_register_consumer(uint32_t,uint32_t,uint32_t);\n'
         'void port_task_dispatch_blocker(const char*);\n'

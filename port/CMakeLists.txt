@@ -189,6 +189,7 @@ set(PORT_RUNTIME_SOURCES
     runtime/movie_skip.cpp
     runtime/guest_memory.cpp
     runtime/ppu_vmx.cpp
+    runtime/spu_image_cache.cpp
     runtime/msdsp_native.c
     runtime/audio_decoder_native.c
 )
