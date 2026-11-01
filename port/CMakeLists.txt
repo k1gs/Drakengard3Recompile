@@ -117,6 +117,12 @@ set(PS3RECOMP_SCAFFOLD
     "${CMAKE_CURRENT_BINARY_DIR}/ppu_fs.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/ppu_sysprx.cpp"
 )
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_feedback_surfaces.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_pix_capture.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/renderer_pix.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/renderer_feedback.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/feedback_surfaces_gpu.inc")
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 execute_process(COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_ppu_vmx.py"

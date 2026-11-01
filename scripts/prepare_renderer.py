@@ -6,6 +6,8 @@ from prepare_texture_cache import prepare as prepare_texture_cache
 from prepare_vertex_fetch import prepare as prepare_vertex_fetch
 from prepare_pipeline_storage import prepare as prepare_pipeline_storage
 from prepare_depth_surfaces import prepare as prepare_depth_surfaces
+from prepare_feedback_surfaces import prepare as prepare_feedback_surfaces
+from prepare_pix_capture import prepare as prepare_pix_capture
 
 
 def prepare(sdk, output):
@@ -618,6 +620,8 @@ int port_check_vertex_constants(void)
     text=prepare_frame_boundaries(text)
     text=prepare_pipeline_storage(text)
     text=prepare_depth_surfaces(text)
+    text=prepare_feedback_surfaces(text)
+    text=prepare_pix_capture(text)
     # Warning budgets must never hide a later D3D12 validation error.
     replace('for (UINT64 mi = 0; mi < n && _printed < 80; mi++) {',
             'for (UINT64 mi = 0; mi < n; mi++) {')

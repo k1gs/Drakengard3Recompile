@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidateRange(5,500)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001', [switch]$CaptureFrames, [switch]$CaptureRsx, [switch]$Interactive, [switch]$KeyboardOnly, [Alias('SkipIntro')][switch]$SkipMovies, [ValidateRange(1,600)][int]$CaptureCount=12, [ValidateRange(1,3600)][int]$CaptureEvery=120)
+param([ValidateRange(5,500)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001', [switch]$CaptureFrames, [switch]$CaptureRsx, [switch]$Interactive, [switch]$KeyboardOnly, [Alias('SkipIntro')][switch]$SkipMovies, [ValidateRange(1,600)][int]$CaptureCount=12, [ValidateRange(1,3600)][int]$CaptureEvery=120, [switch]$PixCapture)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $exe = Join-Path $root 'build/game/DrakengardRecompile.exe'
@@ -26,6 +26,17 @@ $values = @{
     PORT_FIFO_DUMP_DIR=$fifoDir
 }
 $previous = @{}
+if($PixCapture) {
+    if($Seconds -gt 300){throw 'PIX runs are limited to 300 seconds'}
+    $tools=& (Join-Path $PSScriptRoot 'doctor-gpu-tools.ps1') -Json | ConvertFrom-Json
+    $pix=$tools.pix | Where-Object gpu_capturer | Sort-Object { [version]$_.version } -Descending | Select-Object -First 1
+    if(!$pix){throw 'PIX GPU capturer not found; run scripts/doctor-gpu-tools.ps1 -Json'}
+    $trigger=Join-Path $root "work/rsx-scene-$Run.trigger"
+    if(Test-Path -LiteralPath $trigger){throw 'Choose a fresh Run ID: PIX trigger already exists'}
+    $values.PORT_PIX_GPU_CAPTURER=$pix.gpu_capturer
+    $values.PORT_PIX_CAPTURE_TRIGGER=$trigger
+    $values.PORT_PIX_CAPTURE_FILE=Join-Path $runDir 'frame.wpix'
+}
 $values.PORT_VISIBLE_TEST=if ($Interactive) { '1' } else { '0' }
 if ($Interactive -and !('NativeTestInput' -as [type])) {
     Add-Type -TypeDefinition @'
