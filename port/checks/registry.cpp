@@ -32,6 +32,7 @@ extern "C"
     int port_check_spu_task_snapshot();
     int port_check_gcm_park();
     int port_check_fifo_flip_boundary();
+    int port_check_fifo_engine_isolation();
     int port_check_prepare_flip();
     int port_check_spu_interpreter_halt();
     int port_check_spu_task_null_branch();
@@ -77,6 +78,7 @@ const Check checks[] = {
     {"--check-spu-task-snapshot", port_check_spu_task_snapshot},
     {"--check-gcm-park", port_check_gcm_park},
     {"--check-fifo-flip-boundary", port_check_fifo_flip_boundary},
+    {"--check-fifo-engine-isolation", port_check_fifo_engine_isolation},
     {"--check-prepare-flip", port_check_prepare_flip},
     {"--check-spu-interpreter-halt", port_check_spu_interpreter_halt},
     {"--check-spu-task-null-branch", port_check_spu_task_null_branch},

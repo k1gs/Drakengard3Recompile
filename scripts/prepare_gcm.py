@@ -46,7 +46,29 @@ def prepare(sdk, output):
     return (s32)bufferId;
 }
 '''+text[end:]
-    text='void port_renderer_submit_pending(void);\n'+text
+    text='void port_renderer_submit_pending(void);\nstatic const void* s_port_gcm_render_state;\n'+text
+    anchor='    static rsx_state s_state;'
+    if text.count(anchor)!=1: raise ValueError('Pinned FIFO render state changed')
+    text=text.replace(anchor,anchor+'\n    s_port_gcm_render_state=&s_state;')
+    # Drakengard's libgcm uses subchannel 1 for NV0039 report transfers.
+    # Its FORMAT at 0x324 aliases NV4097 COLOR_MASK: sending both engines
+    # through the 3D decoder turns a transfer format of 0x101 into G/B writes.
+    start=text.index('                /* The subchannel is a binding slot, not an engine selector:')
+    end=text.index('                /* GCM_SUBCH_GATE=',start)
+    original=text[start:end]
+    if 'static int s1_2d = -1;' not in original:
+        raise ValueError('Pinned legacy subchannel-1 routing changed')
+    text=text[:start]+'''                /* This title uses libgcm's default engine bindings: subchannel
+                 * 0 is NV4097, subchannel 1 is NV0039. Keep transfer registers
+                 * out of the 3D state; they overlap alpha, blend and colour
+                 * mask registers. Transfers still go to the existing 2D
+                 * dispatcher, including its explicit unsupported diagnostics.
+                 * This does not implement NV0039 copies or assume they succeed.
+                 */
+'''+text[end:]
+    old='} else if (subch == 0 || (subch == 1 && !s1_2d)) {'
+    if text.count(old)!=1: raise ValueError('Pinned FIFO engine split changed')
+    text=text.replace(old,'} else if (subch == 0) {')
     old='''        if (begin && end > begin && cur >= begin && cur + GCM_RECYCLE_SLACK >= end
                 && head_consumed && s_title_overran) {'''
     if text.count(old)!=1: raise ValueError('Pinned ring recycle guard changed')
@@ -148,6 +170,14 @@ void port_gcm_contract_begin(u32 ea) {
     vm_write32(GCM_CONTROL_GUEST_ADDR,0); vm_write32(GCM_CONTROL_GUEST_ADDR+4,0);
 }
 u32 port_gcm_contract_get(void) { return s_fifo_getoff; }
+void port_gcm_contract_render_state(u32 out[8]) {
+    const rsx_state* st=(const rsx_state*)s_port_gcm_render_state;
+    if(!st) { memset(out,0,8*sizeof(u32));return; }
+    out[0]=st->color_mask;out[1]=st->blend_enable;
+    out[2]=st->blend_sfactor;out[3]=st->blend_dfactor;
+    out[4]=st->blend_equation;out[5]=st->blend_color;
+    out[6]=st->alpha_ref;out[7]=st->stencil_test_enable;
+}
 /* Called only by the FIFO owner's opt-in clock profiler. No guest mutation. */
 void port_gcm_trace_progress(void) {
     u32 context=s_gcm_ctx_out_ea ? vm_read32(s_gcm_ctx_out_ea) : s_gcm_context_ea;

@@ -26,6 +26,45 @@ static void count_flip(uint32_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uin
     ++flip_callbacks;
 }
 
+extern "C" void port_gcm_contract_render_state(uint32_t[8]);
+extern "C" int port_check_fifo_engine_isolation()
+{
+    constexpr uint32_t ea=0x60000000;
+    port_gcm_contract_begin(ea);
+    const uint32_t control=ppu_hle_inject_base+0x2000;
+    uint32_t pos=0;
+    auto method=[&](uint32_t subchannel,uint32_t reg,uint32_t value) {
+        vm_write32(ea+pos,0x40000u|(subchannel<<13)|reg);
+        vm_write32(ea+pos+4,value);pos+=8;
+    };
+    method(0,0x30C,0x55);method(0,0x310,1);method(0,0x314,0x10001);
+    method(0,0x318,0);method(0,0x31C,0x12345678);method(0,0x320,0x80068006);
+    method(0,0x324,0);method(0,0x328,0);
+    vm_write32(control,pos);cellGcm_rsx_process_fifo();
+    uint32_t before[8],after[8];port_gcm_contract_render_state(before);
+    // Captured NV0039 transfer fields overlap NV4097 alpha/blend/mask/stencil.
+    // Exercise an incrementing FIFO packet, not a second copy of the router.
+    method(1,0x184,0x66626660);method(1,0x188,0xFEED0001);
+    vm_write32(ea+pos,(8u<<18)|(1u<<13)|0x30Cu);pos+=4;
+    for(uint32_t value : {0u,0x300FB0u,0u,0u,0x410u,1u,0x101u,0u}) {
+        vm_write32(ea+pos,value);pos+=4;
+    }
+    method(1,0x310,0);
+    vm_write32(control,pos);cellGcm_rsx_process_fifo();
+    port_gcm_contract_render_state(after);
+    bool isolated=!memcmp(before,after,sizeof(before));
+    bool consumed=port_gcm_contract_get()==pos;
+    // Real 3D commands at those same offsets must still reach NV4097.
+    method(0,0x324,0x01010101);method(0,0x310,0);
+    vm_write32(control,pos);cellGcm_rsx_process_fifo();
+    port_gcm_contract_render_state(after);
+    bool render=after[0]==0x01010101 && after[1]==0 && port_gcm_contract_get()==pos;
+    bool ok=isolated&&consumed&&render;
+    fprintf(stderr,"[compat-check] FIFO engines: copy-keeps-render-state=%d consumed=%d 3D-updates=%d %s\n",
+        isolated,consumed,render,ok?"PASS":"FAIL");
+    return ok?0:1;
+}
+
 extern "C" int port_check_prepare_flip()
 {
     bool ok=true;
