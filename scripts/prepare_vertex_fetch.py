@@ -1,4 +1,4 @@
-"""Checked build-local CMP vertex decoding for the D3D12 renderer."""
+"""Checked build-local vertex decoding for the D3D12 renderer."""
 
 
 def prepare(sdk):
@@ -7,6 +7,12 @@ def prepare(sdk):
     if source.count(anchor) != 1 or 'case 6:' in source:
         raise ValueError('Pinned vertex fetch implementation changed')
     fetch = source[source.index(anchor):].replace(anchor, 'static void port_fetch_attrib(', 1)
+    # An enabled zero-stride array broadcasts the element at its memory offset.
+    # Treating it as disabled substitutes the immediate attribute register.
+    guard = '    if (!a->enabled || a->stride == 0 || !vm_base) return;'
+    if fetch.count(guard) != 1:
+        raise ValueError('Pinned vertex array enable guard changed')
+    fetch = fetch.replace(guard, '    if (!a->enabled || !vm_base) return;')
     anchor = '    case 7: /* UB256: u8 unnormalized */'
     if fetch.count(anchor) != 1:
         raise ValueError('Pinned vertex format switch changed')
@@ -50,5 +56,50 @@ int port_check_compressed_vertices(void)
     }
     fprintf(stderr,"[compat-check] CMP vertex BE lanes: %u values %s\n",checked,ok?"PASS":"FAIL");
     return ok?0:1;
+}
+
+/* Enabled zero-stride arrays still source memory: every vertex reads element
+ * zero. Only a disabled array uses the immediate attribute register. */
+int port_check_zero_stride_vertices(void)
+{
+    extern void vm_write32(uint64_t,uint32_t);
+    rsx_state* st=(rsx_state*)calloc(1,sizeof(*st));
+    if(!st) return 2;
+    st->vertex_data4f[4][0]=0.25f;st->vertex_data4f[4][1]=0.5f;
+    st->vertex_data4f[4][2]=0.75f;st->vertex_data4f[4][3]=1.0f;
+    rsx_vertex_attrib* a=&st->vertex_attribs[4];
+    a->enabled=1;a->size=4;a->type=4;a->stride=0;a->format=0x44;a->offset=0x2000;
+    u32 ea=cellGcmResolveLocated(1,a->offset);
+    vm_write32(ea,0xFFFFFFFFu);vm_write32(ea+4,0x204080FFu);
+    float out[4];int repeated=1,changed=1,disabled=1,stepped=1,partial=1,floats=1;
+    const u32 indices[]={0,1,715,65535};
+    for(unsigned n=0;n<4;n++) {
+        port_fetch_attrib(st,4,indices[n],out);
+        for(unsigned k=0;k<4;k++) if(out[k]!=1.0f) repeated=0;
+    }
+    vm_write32(ea,0x10203040u);
+    a->frequency=7;st->frequency_divider_op=1u<<4;
+    port_fetch_attrib(st,4,715,out);
+    for(unsigned k=0;k<4;k++) if(fabsf(out[k]-(float)((k+1)*16)/255.0f)>1e-7f) changed=0;
+    a->enabled=0;
+    port_fetch_attrib(st,4,715,out);
+    if(memcmp(out,st->vertex_data4f[4],sizeof(out))) disabled=0;
+    a->enabled=1;a->frequency=1;a->stride=4;
+    port_fetch_attrib(st,4,1,out);
+    const float expected[]={32/255.0f,64/255.0f,128/255.0f,1};
+    for(unsigned k=0;k<4;k++) if(fabsf(out[k]-expected[k])>1e-7f) stepped=0;
+    a->stride=0;a->size=2;
+    port_fetch_attrib(st,4,123,out);
+    if(fabsf(out[0]-16/255.0f)>1e-7f || fabsf(out[1]-32/255.0f)>1e-7f ||
+       out[2]!=0.75f || out[3]!=1) partial=0;
+    a->type=2;a->size=4;
+    vm_write32(ea,0x3FC00000u);vm_write32(ea+4,0xC0000000u);
+    vm_write32(ea+8,0x00000000u);vm_write32(ea+12,0x3F800000u);
+    port_fetch_attrib(st,4,65535,out);
+    if(out[0]!=1.5f || out[1]!=-2 || out[2]!=0 || out[3]!=1) floats=0;
+    int ok=repeated&&changed&&disabled&&stepped&&partial&&floats;
+    fprintf(stderr,"[compat-check] zero-stride vertices: repeated=%d memory-update=%d disabled=%d stepped=%d partial=%d float=%d %s\n",
+            repeated,changed,disabled,stepped,partial,floats,ok?"PASS":"FAIL");
+    free(st);return ok?0:1;
 }
 '''
