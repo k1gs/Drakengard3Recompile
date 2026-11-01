@@ -168,6 +168,46 @@ static int vp_reserve_vs_slot(void)
         memmove(&s_d3d.vp_vs[0], &s_d3d.vp_vs[1], sizeof(VPVSEntry)*(VP_VS_CACHE-1));
         slot = VP_VS_CACHE - 1;
     }''','    int slot = vp_reserve_vs_slot();')
+
+    replace('static int vp_get_vs(const rsx_state* st)', r'''
+int port_check_vertex_program_identity(void)
+{
+    extern int rsx_vp_decompile(const uint8_t*,u32,char*,u32);
+    /* Only the first terminated program is consumed by the decompiler. */
+    u8 code[64]={0};code[12]=1;
+    char* a=(char*)calloc(1,262144);char* b=(char*)calloc(1,262144);
+    if(!a || !b) {free(a);free(b);return 2;}
+    u32 first=vp_hash_ucode(code,sizeof(code));
+    int na=rsx_vp_decompile(code,sizeof(code),a,262144);
+    code[32]=0x51;code[48]=0xA7;
+    u32 tail=vp_hash_ucode(code,sizeof(code));
+    int nb=rsx_vp_decompile(code,sizeof(code),b,262144);
+    int same_source=na==1 && nb==1 && !strcmp(a,b);
+    int stable=first==tail;
+    code[0]=4; /* Consumed instruction words must still affect the key. */
+    int instruction=vp_hash_ucode(code,sizeof(code))!=tail;code[0]=0;
+    code[12]=0;code[28]=1; /* Move END: the second instruction now matters. */
+    u32 longer=vp_hash_ucode(code,sizeof(code));code[16]=4;
+    int extended=vp_hash_ucode(code,sizeof(code))!=longer;
+    code[12]=code[28]=0;code[44]=code[60]=0;
+    u32 unterminated=vp_hash_ucode(code,sizeof(code));code[63]^=0x20;
+    int bounded=vp_hash_ucode(code,sizeof(code))!=unterminated;
+    int ok=stable&&same_source&&instruction&&extended&&bounded;
+    fprintf(stderr,"[compat-check] VP program identity: tail-stable=%d source-same=%d instruction=%d extended=%d unterminated=%d %s\n",
+            stable,same_source,instruction,extended,bounded,ok?"PASS":"FAIL");
+    free(a);free(b);return ok?0:1;
+}
+
+static int vp_get_vs(const rsx_state* st)''')
+
+    # Resident VP memory can contain other programs after this one's END.
+    # Match the byte range consumed by the decompiler, retaining the full
+    # bounded input when no END exists so malformed programs keep their key.
+    replace('static u32 vp_hash_ucode(const u8* p, u32 n)\n{', r'''static u32 vp_hash_ucode(const u8* p, u32 n)
+{
+    extern u32 rsx_vp_program_size_instrs(const u8*,u32);
+    u32 instructions=rsx_vp_program_size_instrs(p,n);
+    if(instructions) n=instructions*16u;''')
     # Snapshot identity at record time so captures can detect stale bindings.
     replace('    int vs_idx;         /* VPVSEntry slot',
             '    u32 vs_hash;\n    int vs_idx;         /* VPVSEntry slot')

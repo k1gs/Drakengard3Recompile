@@ -17,6 +17,7 @@ extern "C"
     int port_check_depth_surfaces_gpu();
     int port_check_feedback_surfaces_gpu();
     int port_check_vertex_cache();
+    int port_check_vertex_program_identity();
     int port_check_pipeline_cache();
     int port_check_texture_units();
     int port_check_texture_cache();
@@ -68,6 +69,7 @@ const Check checks[] = {
     {"--check-depth-surfaces-gpu", port_check_depth_surfaces_gpu},
     {"--check-feedback-surfaces-gpu", port_check_feedback_surfaces_gpu},
     {"--check-vertex-cache", port_check_vertex_cache},
+    {"--check-vertex-program-identity", port_check_vertex_program_identity},
     {"--check-pipeline-cache", port_check_pipeline_cache},
     {"--check-texture-units", port_check_texture_units},
     {"--check-texture-cache", port_check_texture_cache},
