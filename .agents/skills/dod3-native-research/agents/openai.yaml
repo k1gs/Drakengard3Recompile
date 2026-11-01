@@ -1,0 +1,6 @@
+interface:
+  display_name: "Drakengard 3 Native Research"
+  short_description: "Trace guest, SPURS and FIFO failures from evidence"
+  default_prompt: "Use $dod3-native-research to investigate the current native compatibility blocker."
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Drakengard 3 Frame Analysis"
+  short_description: "Trace D3D12 draws, resources and frame performance"
+  default_prompt: "Use $dod3-frame-analysis to trace the current rendering defect through a GPU capture."
+policy:
+  allow_implicit_invocation: true
