@@ -206,6 +206,7 @@ set(PORT_DIAGNOSTIC_SOURCES
 set(PORT_CHECK_SOURCES
     checks/registry.cpp
     checks/compat_checks.cpp
+    checks/queue_wake_checks.cpp
     checks/ppu_vmx_checks.cpp
     checks/spu_dispatch_checks.cpp
     checks/spu_task_checks.cpp

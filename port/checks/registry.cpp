@@ -9,6 +9,7 @@ extern "C"
     int port_check_lwcond_layout();
     int port_check_memory_table();
     int port_check_queue();
+    int port_check_queue_wake();
     int port_check_lfqueue();
     int port_check_spurs_events();
     int port_check_vertex_constants();
@@ -54,6 +55,7 @@ struct Check
     int (*run)();
 };
 const Check checks[] = {
+    {"--check-queue-wake", port_check_queue_wake},
     {"--check-compressed-vertices", port_check_compressed_vertices},
     {"--check-zero-stride-vertices", port_check_zero_stride_vertices},
     {"--check-gamepad", port_check_gamepad},

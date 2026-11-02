@@ -13,6 +13,13 @@ def prepare(sdk, output):
         source = sdk / 'runtime/spu' / (name + '.c')
         text = source.read_text(encoding='utf-8')
         if name == 'spu_channels':
+            # Notify queue waiters only after successful atomic publication and
+            # after releasing the lock-line lock. Keep the SDK event-flag hook.
+            for indent in ('            ', '        '):
+                anchor='\n'+indent+'spu_taskset_line_committed(ea & ~127u);'
+                text=replace_once(text,anchor,
+                    anchor+'\n'+indent+'port_queue_line_committed(ea & ~127u);')
+            text='void port_queue_line_committed(uint32_t);\n'+text
             anchor='    if (channel_is_mfc(channel)) {\n        /* Atomic line ops'
             text = replace_once(text, anchor,
                 '    if (channel_is_mfc(channel)) {\n'

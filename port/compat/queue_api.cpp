@@ -1,3 +1,4 @@
+#include "queue_wake.h"
 #include "ppu_recomp.h"
 #include "ps3emu/nid.h"
 #include <cstdio>
@@ -15,6 +16,7 @@ extern "C" void spu_lockline_lock();
 extern "C" void spu_lockline_unlock();
 extern "C" void spu_coh_notify_write(uint32_t);
 extern "C" uint8_t* vm_base;
+extern "C" uint64_t port_queue_wait_signals,port_queue_wait_timeouts,port_queue_commit_notifications;
 extern "C" [[noreturn]] void port_compatibility_blocker(const char*);
 static std::mutex trace_lock;
 static std::map<uint32_t,unsigned> calls;
@@ -84,12 +86,16 @@ static void pop_body(ppu_context* ctx)
     // Caller AD215C..AD2170 passes q, out, 0, 1 and treats errors as fatal.
     // Preserve both mode arguments; r6 is the waiting mode on this path.
     if(ctx->gpr[5]>1 || ctx->gpr[6]>1) { result(ctx,0x80410902); return; }
+    auto* wake=ctx->gpr[6]?port_queue_wakes().get(q):nullptr;
     unsigned n;
     { std::lock_guard<std::mutex> lock(trace_lock); n=++calls[q]; }
     if(n<=2) fprintf(stderr,"[queue] pop q=%08X out=%08X mode5=%llu wait=%llu lr=%08llX\n",
         q,out,(unsigned long long)ctx->gpr[5],(unsigned long long)ctx->gpr[6],(unsigned long long)ctx->lr);
     auto started=GetTickCount64(), logged=started;
     for(;;) {
+        // Snapshot before checking the guest state. A commit between the check
+        // and wait invalidates this ticket, so it cannot be missed.
+        auto ticket=wake?wake->snapshot():0;
         spu_lockline_lock();
         uint32_t pop=vm_read32(q),push=vm_read32(q+4),size=vm_read32(q+0x10),depth=vm_read32(q+0x14);
         uint64_t buffer=((uint64_t)vm_read32(q+0x18)<<32)|vm_read32(q+0x1C);
@@ -161,7 +167,13 @@ static void pop_body(ppu_context* ctx)
             }
             logged=now;
         }
-        Sleep(1);
+        // No guest lock is held while parking. Every wake rechecks the queue.
+        // The timeout retains progress for producer paths without notification.
+        if(wake) {
+            bool signaled=wake->wait(ticket);
+            std::atomic_ref<uint64_t>(signaled?port_queue_wait_signals:port_queue_wait_timeouts)
+                .fetch_add(1,std::memory_order_relaxed);
+        } else Sleep(1);
     }
 }
 static void lf_push_body(ppu_context* ctx)
@@ -266,4 +278,21 @@ extern "C" void port_register_queue_api()
     ps3_hle_register_ctx(ps3_compute_nid("cellSpursQueuePopBody"),"cellSpursQueuePopBody",pop_body);
     ps3_hle_register_ctx(ps3_compute_nid("_cellSpursLFQueuePushBody"),"_cellSpursLFQueuePushBody",lf_push_body);
     ps3_hle_register_ctx(ps3_compute_nid("_cellSpursLFQueueInitialize"),"_cellSpursLFQueueInitialize",lf_initialize);
+}
+
+PortQueueWakeRegistry& port_queue_wakes() {
+    static PortQueueWakeRegistry wakes;
+    return wakes;
+}
+extern "C" {
+uint64_t port_queue_wait_signals=0;
+uint64_t port_queue_wait_timeouts=0;
+uint64_t port_queue_commit_notifications=0;
+}
+
+// Called after a successful SPU atomic commit releases the lock-line lock.
+// Preserve the SDK event-flag hook; this observer is independent of it.
+extern "C" void port_queue_line_committed(uint32_t line) {
+    if(port_queue_wakes().publish(line))
+        std::atomic_ref<uint64_t>(port_queue_commit_notifications).fetch_add(1,std::memory_order_relaxed);
 }
