@@ -21,6 +21,7 @@ extern "C"
     int port_check_vertex_program_identity();
     int port_check_pipeline_cache();
     int port_check_texture_units();
+    int port_check_texture_prepass();
     int port_check_texture_cache();
     int port_check_renderer_options();
     int port_check_gpu_writer_gate();
@@ -55,6 +56,7 @@ struct Check
     int (*run)();
 };
 const Check checks[] = {
+    {"--check-texture-prepass", port_check_texture_prepass},
     {"--check-queue-wake", port_check_queue_wake},
     {"--check-compressed-vertices", port_check_compressed_vertices},
     {"--check-zero-stride-vertices", port_check_zero_stride_vertices},
