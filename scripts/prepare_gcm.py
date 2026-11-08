@@ -5,6 +5,31 @@ import re
 def prepare(sdk, output):
     source=sdk/'libs/video/cellGcmSys.c'
     text=source.read_text(encoding='utf-8')
+    old='    /* Approximate: increment each time queried (games use this for timing) */\n    return s_vblank_count++;'
+    if text.count(old)!=1: raise ValueError('Pinned vblank getter changed')
+    text=text.replace(old,'    /* Display ticks advance the counter; polling only observes it. */\n    return s_vblank_count;')
+    text+=r'''
+/* Polling must not advance guest time. No ticker or guest callback is started. */
+int port_check_vblank_counter(void)
+{
+    u32 saved=s_vblank_count;
+    long pending=(long)GCM_PENDING_TAKE();
+    s_vblank_count=42;
+    int stable=1;
+    for(unsigned i=0;i<1024;i++) if(cellGcmGetVBlankCount()!=42) stable=0;
+    cellGcmTickVBlank();
+    int tick=cellGcmGetVBlankCount()==43 && cellGcmGetVBlankCount()==43;
+    cellGcm_request_tick();
+    int request=cellGcmGetVBlankCount()==44 && cellGcmGetVBlankCount()==44;
+    s_vblank_count=0xFFFFFFFFu;cellGcmTickVBlank();
+    int wrap=cellGcmGetVBlankCount()==0 && cellGcmGetVBlankCount()==0;
+    s_vblank_count=saved;GCM_PENDING_TAKE();GCM_PENDING_SET(pending);
+    int ok=stable && tick && request && wrap;
+    fprintf(stderr,"[compat-check] vblank polling=%d tick=%d request=%d wrap=%d %s\n",
+            stable,tick,request,wrap,ok?"PASS":"FAIL");
+    return ok?0:1;
+}
+'''
     old='    if (v < 0) v = getenv("GCM_FLIPCB_ONTICK") ? 1 : 0;'
     if text.count(old)!=1: raise ValueError('Pinned flip callback policy changed')
     # Never enter guest code synchronously on the FIFO owner. The existing

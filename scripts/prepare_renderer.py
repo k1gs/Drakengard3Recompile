@@ -9,6 +9,7 @@ from prepare_depth_surfaces import prepare as prepare_depth_surfaces
 from prepare_feedback_surfaces import prepare as prepare_feedback_surfaces
 from prepare_pix_capture import prepare as prepare_pix_capture
 from prepare_texture_prepass import prepare as prepare_texture_prepass
+from prepare_scissor import prepare as prepare_scissor
 
 
 def prepare(sdk, output):
@@ -723,6 +724,7 @@ int port_check_renderer_options(void)
     text=prepare_depth_surfaces(text)
     text=prepare_feedback_surfaces(text)
     text=prepare_texture_prepass(text)
+    text=prepare_scissor(text)
     text=prepare_pix_capture(text)
     # Warning budgets must never hide a later D3D12 validation error.
     replace('for (UINT64 mi = 0; mi < n && _printed < 80; mi++) {',
