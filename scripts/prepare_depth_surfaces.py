@@ -224,6 +224,8 @@ int port_check_depth_surfaces(void)
 
 def prepare_commands(sdk, output):
     from prepare_stencil import commands as prepare_stencil_commands
+    from prepare_clear import commands as prepare_clear_commands
+    from prepare_color_surfaces import commands as prepare_color_commands
     from compat_source import resolve_local_includes, write_if_changed
     source = sdk / 'libs/video/rsx_commands.c'
     text = source.read_text(encoding='utf-8')
@@ -237,4 +239,6 @@ def prepare_commands(sdk, output):
     text = text.replace(anchor, anchor + '\n    port_renderer_depth_dma(0xFEED0000u);')
     text = 'void port_renderer_depth_dma(unsigned int);\n' + text
     text=prepare_stencil_commands(text)
+    text=prepare_clear_commands(text)
+    text=prepare_color_commands(text)
     write_if_changed(output / 'rsx_commands_compat.c', resolve_local_includes(text, source))

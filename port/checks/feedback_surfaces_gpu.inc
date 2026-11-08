@@ -56,6 +56,7 @@ int port_check_feedback_surfaces_gpu(void)
     td.Layout=D3D12_TEXTURE_LAYOUT_UNKNOWN;
     td.Flags=D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
     D3D12_CLEAR_VALUE cv={0}; cv.Format=td.Format;
+    port_rt_reserve(2);s_d3d.off_rt_count=2;
     for (int i=0;i<2;i++) {
         FEEDBACK_GPU_TRY(device->lpVtbl->CreateCommittedResource(
             device,&hp,D3D12_HEAP_FLAG_NONE,&td,D3D12_RESOURCE_STATE_RENDER_TARGET,
@@ -177,7 +178,8 @@ int port_check_feedback_surfaces_gpu(void)
 cleanup:
     if(FAILED(hr)) fprintf(stderr,"[compat-check] feedback GPU HRESULT=%08lX\n",(unsigned long)hr);
     port_feedback_release();
-    for(int i=0;i<2;i++) { s_d3d.off_rt[i].res=NULL; if(src[i]) src[i]->lpVtbl->Release(src[i]); }
+    for(int i=0;i<2;i++) { if((unsigned)i<s_d3d.off_rt_count)s_d3d.off_rt[i].res=NULL; if(src[i]) src[i]->lpVtbl->Release(src[i]); }
+    port_rt_storage_release();
     s_d3d.cmd_list=NULL; s_d3d.device=NULL;
     if(readback) readback->lpVtbl->Release(readback);
     if(rtv_heap) rtv_heap->lpVtbl->Release(rtv_heap);

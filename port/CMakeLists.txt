@@ -138,7 +138,19 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_stencil.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_depth_surfaces.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/renderer_stencil.inc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/checks/stencil_gpu.inc")
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/stencil_gpu.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_rt_lifetime.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/renderer_rt_lifetime.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/rt_lifetime_gpu.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_clear.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/renderer_clear.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/clear_gpu.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_color_surfaces.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/renderer_color_surfaces.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/color_surfaces_gpu.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_rt_layouts.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/renderer_rt_layouts.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/rt_layouts_gpu.inc")
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 execute_process(COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_ppu_vmx.py"

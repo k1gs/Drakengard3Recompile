@@ -111,7 +111,8 @@ static void port_feedback_bind(const D3D12DrawRecord* dr,u32 draw,int color,cons
         /* Every draw has a separate descriptor window. The snapshot itself
          * can be reused in GPU order after its previous readers finish. */
         srv_write(DRAW_SRV_BASE+draw*PORT_TEXTURE_UNITS+u,snapshots[k],
-            (DXGI_FORMAT)s_d3d.off_rt[source].dxgi,D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING);
+            (DXGI_FORMAT)s_d3d.off_rt[source].dxgi,
+            rsx_remap_to_d3d(dr->tex[u].ctrl1,dr->tex[u].fmt&0x9Fu));
         if(getenv("PORT_RENDER_TRACE")) {
             static unsigned shown;if(shown++<32)
                 fprintf(stderr,"[feedback] draw=%u unit=%u source=%08X snapshot=%p\n",draw,u,s_d3d.off_rt[source].off,snapshots[k]);

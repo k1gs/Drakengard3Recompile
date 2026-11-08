@@ -1,8 +1,9 @@
 [CmdletBinding()]
-param([ValidateRange(5,500)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001', [switch]$CaptureFrames, [switch]$CaptureRsx, [switch]$Interactive, [switch]$KeyboardOnly, [Alias('SkipIntro')][switch]$SkipMovies, [ValidateRange(1,600)][int]$CaptureCount=12, [ValidateRange(1,3600)][int]$CaptureEvery=120, [switch]$PixCapture)
+param([ValidateRange(5,500)][int]$Seconds=30, [ValidatePattern('^[a-zA-Z0-9_-]+$')][string]$Run='001', [switch]$CaptureFrames, [switch]$CaptureRsx, [switch]$Interactive, [switch]$KeyboardOnly, [Alias('SkipIntro')][switch]$SkipMovies, [ValidateRange(1,600)][int]$CaptureCount=12, [ValidateRange(1,3600)][int]$CaptureEvery=120, [switch]$PixCapture, [string]$Hdd0Root)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $exe = Join-Path $root 'build/game/DrakengardRecompile.exe'
+if (!$Hdd0Root) { $Hdd0Root = Join-Path $root 'work/native-state/dev_hdd0' }
 $elf = Join-Path $root 'work/extracted/PS3_GAME/USRDIR/EBOOT.elf'
 $prefix = Join-Path $root "reports/game-run-$Run"
 if (Test-Path "$prefix.json") { throw 'Choose a fresh Run ID' }
@@ -17,7 +18,7 @@ $fifoDir = Join-Path $runDir 'gpu-fifo-dumps'
 New-Item -ItemType Directory -Force $fifoDir | Out-Null
 $values = @{
     PS3_VFS_ROOT=(Join-Path $root 'work/extracted');
-    PS3_HDD0_ROOT=(Join-Path $root 'work/native-state/dev_hdd0');
+    PS3_HDD0_ROOT=[IO.Path]::GetFullPath($Hdd0Root);
     PS3_DEV_FLASH=(Join-Path $root 'tools/rpcs3/dev_flash');
     PS3_BOOT_PATH='/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN';
     PS3_HLE_UNRESOLVED='fail'

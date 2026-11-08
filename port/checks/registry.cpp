@@ -26,6 +26,10 @@ extern "C"
     int port_check_samplers_gpu();
     int port_check_mip_uploads_gpu();
     int port_check_stencil_gpu();
+    int port_check_rt_lifetime_gpu();
+    int port_check_clear_gpu();
+    int port_check_color_surfaces_gpu();
+    int port_check_rt_layouts_gpu();
     int port_check_vblank_counter();
     int port_check_texture_cache();
     int port_check_renderer_options();
@@ -61,6 +65,10 @@ struct Check
     int (*run)();
 };
 const Check checks[] = {
+    {"--check-rt-layouts-gpu", port_check_rt_layouts_gpu},
+    {"--check-color-surfaces-gpu", port_check_color_surfaces_gpu},
+    {"--check-rt-lifetime-gpu", port_check_rt_lifetime_gpu},
+    {"--check-clear-gpu", port_check_clear_gpu},
     {"--check-stencil-gpu", port_check_stencil_gpu},
     {"--check-mip-uploads-gpu", port_check_mip_uploads_gpu},
     {"--check-samplers-gpu", port_check_samplers_gpu},

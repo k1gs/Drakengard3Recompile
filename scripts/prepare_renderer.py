@@ -13,6 +13,10 @@ from prepare_scissor import prepare as prepare_scissor
 from prepare_samplers import prepare as prepare_samplers
 from prepare_mip_uploads import prepare as prepare_mip_uploads
 from prepare_stencil import prepare as prepare_stencil
+from prepare_rt_lifetime import prepare as prepare_rt_lifetime
+from prepare_clear import prepare as prepare_clear
+from prepare_color_surfaces import prepare as prepare_color_surfaces
+from prepare_rt_layouts import prepare as prepare_rt_layouts
 
 
 def prepare(sdk, output):
@@ -732,6 +736,10 @@ int port_check_renderer_options(void)
     text=prepare_samplers(text)
     text=prepare_mip_uploads(text)
     text=prepare_stencil(text)
+    text=prepare_rt_lifetime(text)
+    text=prepare_clear(text)
+    text=prepare_color_surfaces(text)
+    text=prepare_rt_layouts(text)
     # Warning budgets must never hide a later D3D12 validation error.
     replace('for (UINT64 mi = 0; mi < n && _printed < 80; mi++) {',
             'for (UINT64 mi = 0; mi < n; mi++) {')
