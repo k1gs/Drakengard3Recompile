@@ -134,7 +134,11 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/checks/samplers_gpu.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_mip_uploads.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/renderer_mip_uploads.inc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/checks/mip_uploads_gpu.inc")
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/mip_uploads_gpu.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_stencil.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_depth_surfaces.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/renderer_stencil.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/stencil_gpu.inc")
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 execute_process(COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_ppu_vmx.py"
