@@ -23,6 +23,7 @@ extern "C"
     int port_check_texture_units();
     int port_check_texture_prepass();
     int port_check_scissor_gpu();
+    int port_check_samplers_gpu();
     int port_check_vblank_counter();
     int port_check_texture_cache();
     int port_check_renderer_options();
@@ -58,6 +59,7 @@ struct Check
     int (*run)();
 };
 const Check checks[] = {
+    {"--check-samplers-gpu", port_check_samplers_gpu},
     {"--check-scissor-gpu", port_check_scissor_gpu},
     {"--check-vblank-counter", port_check_vblank_counter},
     {"--check-texture-prepass", port_check_texture_prepass},

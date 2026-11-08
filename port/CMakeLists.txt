@@ -128,7 +128,10 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_texture_prepass.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/checks/texture_prepass.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_scissor.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/checks/scissor_gpu.inc")
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/scissor_gpu.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_samplers.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/renderer_samplers.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/samplers_gpu.inc")
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 execute_process(COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_ppu_vmx.py"
