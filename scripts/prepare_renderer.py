@@ -11,6 +11,7 @@ from prepare_pix_capture import prepare as prepare_pix_capture
 from prepare_texture_prepass import prepare as prepare_texture_prepass
 from prepare_scissor import prepare as prepare_scissor
 from prepare_samplers import prepare as prepare_samplers
+from prepare_mip_uploads import prepare as prepare_mip_uploads
 
 
 def prepare(sdk, output):
@@ -728,6 +729,7 @@ int port_check_renderer_options(void)
     text=prepare_scissor(text)
     text=prepare_pix_capture(text)
     text=prepare_samplers(text)
+    text=prepare_mip_uploads(text)
     # Warning budgets must never hide a later D3D12 validation error.
     replace('for (UINT64 mi = 0; mi < n && _printed < 80; mi++) {',
             'for (UINT64 mi = 0; mi < n; mi++) {')

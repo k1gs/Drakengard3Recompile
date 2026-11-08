@@ -28,7 +28,7 @@ int port_check_samplers_gpu(void)
     ID3D12RootSignature* root=NULL;ID3D12PipelineState* pso=NULL;
     ID3DBlob *sig=NULL,*vs=NULL,*ps=NULL,*error=NULL;
     HANDLE event=NULL;HRESULT hr=S_OK;int ok=0,software=0;unsigned matched=0;
-    ID3D12Resource *source_texture=NULL,*upload=NULL;ID3D12DescriptorHeap* srv_heap=NULL;
+    ID3D12Resource *source_texture=NULL;ID3D12DescriptorHeap* srv_heap=NULL;
 #define SAMPLER_TRY(call) do { hr=(call);if(FAILED(hr)) goto cleanup; } while(0)
     hr=D3D12CreateDevice(NULL,D3D_FEATURE_LEVEL_11_0,&IID_ID3D12Device,(void**)&device);
     if(FAILED(hr)) {
@@ -87,37 +87,18 @@ int port_check_samplers_gpu(void)
     hp.Type=D3D12_HEAP_TYPE_READBACK;
     SAMPLER_TRY(device->lpVtbl->CreateCommittedResource(device,&hp,D3D12_HEAP_FLAG_NONE,&rb,
         D3D12_RESOURCE_STATE_COPY_DEST,NULL,&IID_ID3D12Resource,&readback));
-    /* Two-level real texture: base has red/blue columns, mip1 is green. */
-    D3D12_RESOURCE_DESC image=td;image.Width=2;image.Height=2;image.MipLevels=2;image.Flags=0;
-    hp.Type=D3D12_HEAP_TYPE_DEFAULT;
-    SAMPLER_TRY(device->lpVtbl->CreateCommittedResource(device,&hp,D3D12_HEAP_FLAG_NONE,&image,
-        D3D12_RESOURCE_STATE_COPY_DEST,NULL,&IID_ID3D12Resource,&source_texture));
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT image_fp[2];UINT64 image_bytes=0;
-    device->lpVtbl->GetCopyableFootprints(device,&image,0,2,0,image_fp,NULL,NULL,&image_bytes);
-    rb.Width=image_bytes;hp.Type=D3D12_HEAP_TYPE_UPLOAD;
-    SAMPLER_TRY(device->lpVtbl->CreateCommittedResource(device,&hp,D3D12_HEAP_FLAG_NONE,&rb,
-        D3D12_RESOURCE_STATE_GENERIC_READ,NULL,&IID_ID3D12Resource,&upload));
-    unsigned char* pixels=NULL;D3D12_RANGE no_read={0,0};
-    SAMPLER_TRY(upload->lpVtbl->Map(upload,0,&no_read,(void**)&pixels));
-    const unsigned char row[8]={255,0,0,255,0,0,255,255},green[4]={0,255,0,255};
-    for(unsigned y=0;y<2;y++) memcpy(pixels+image_fp[0].Offset+y*image_fp[0].Footprint.RowPitch,row,8);
-    memcpy(pixels+image_fp[1].Offset,green,4);upload->lpVtbl->Unmap(upload,0,NULL);
-    for(unsigned mip=0;mip<2;mip++) {
-        D3D12_TEXTURE_COPY_LOCATION dst={0},src={0};dst.pResource=source_texture;dst.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;dst.SubresourceIndex=mip;
-        src.pResource=upload;src.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;src.PlacedFootprint=image_fp[mip];
-        list->lpVtbl->CopyTextureRegion(list,&dst,0,0,0,&src,NULL);
-    }
-    D3D12_RESOURCE_BARRIER texture_barrier={0};texture_barrier.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    texture_barrier.Transition.pResource=source_texture;texture_barrier.Transition.Subresource=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    texture_barrier.Transition.StateBefore=D3D12_RESOURCE_STATE_COPY_DEST;texture_barrier.Transition.StateAfter=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    list->lpVtbl->ResourceBarrier(list,1,&texture_barrier);
+    /* The production uploader and production SRV builder must expose mip1. */
+    const u8 guest[20]={255,255,0,0,255,0,0,255,255,255,0,0,255,0,0,255,255,0,255,0};
+    memcpy(vm_base+0x601F0000u,guest,sizeof(guest));
+    int texture_slot=vp_upload_tex_slot(0x601F0000u,2,2,0x85,0,2,0);
+    if(texture_slot<0) goto cleanup;
+    source_texture=s_d3d.vp_tex[texture_slot].res;
+    source_texture->lpVtbl->AddRef(source_texture);
     hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;hd.NumDescriptors=1;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     SAMPLER_TRY(device->lpVtbl->CreateDescriptorHeap(device,&hd,&IID_ID3D12DescriptorHeap,&srv_heap));
     s_d3d.srv_heap=srv_heap;
-    D3D12_CPU_DESCRIPTOR_HANDLE srv;srv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(srv_heap,&srv);
-    D3D12_SHADER_RESOURCE_VIEW_DESC view={0};view.Format=image.Format;view.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;
-    view.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;view.Texture2D.MipLevels=2;
-    device->lpVtbl->CreateShaderResourceView(device,source_texture,&view,srv);
+    s_d3d.srv_inc=device->lpVtbl->GetDescriptorHandleIncrementSize(device,D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    srv_write_ex(0,source_texture,DXGI_FORMAT_R8G8B8A8_UNORM,D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,0);
     D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu;srv_heap->lpVtbl->GetGPUDescriptorHandleForHeapStart(srv_heap,&srv_gpu);
     const float black[4]={0,0,0,1};
     list->lpVtbl->ClearRenderTargetView(list,rtv,black,0,NULL);
@@ -182,10 +163,10 @@ int port_check_samplers_gpu(void)
 cleanup:
     fprintf(stderr,"[compat-check] sampler GPU device=%s decode=%d unsupported=%d pixels=%u/13 %s hr=%08lX\n",
         software?"WARP":"hardware",decode,unsupported,matched,ok?"PASS":"FAIL",(unsigned long)hr);
-    port_samplers_release();s_d3d.device=NULL;s_d3d.cmd_list=NULL;s_d3d.srv_heap=NULL;
+    port_mip_release_cache();port_samplers_release();s_d3d.device=NULL;s_d3d.cmd_list=NULL;s_d3d.srv_heap=NULL;
     if(event) CloseHandle(event);
 #define SAMPLER_RELEASE(p) if(p) p->lpVtbl->Release(p)
-    SAMPLER_RELEASE(source_texture);SAMPLER_RELEASE(upload);SAMPLER_RELEASE(srv_heap);
+    SAMPLER_RELEASE(source_texture);SAMPLER_RELEASE(srv_heap);
     SAMPLER_RELEASE(readback);SAMPLER_RELEASE(target);SAMPLER_RELEASE(heap);
     SAMPLER_RELEASE(pso);SAMPLER_RELEASE(root);SAMPLER_RELEASE(sig);SAMPLER_RELEASE(vs);SAMPLER_RELEASE(ps);SAMPLER_RELEASE(error);
     SAMPLER_RELEASE(list);SAMPLER_RELEASE(allocator);SAMPLER_RELEASE(queue);SAMPLER_RELEASE(fence);
