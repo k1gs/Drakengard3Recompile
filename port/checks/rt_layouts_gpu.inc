@@ -43,11 +43,14 @@ int port_check_rt_layouts_gpu(void)
     ID3D12CommandQueue* queue=NULL;ID3D12CommandAllocator* allocator=NULL;
     ID3D12GraphicsCommandList* list=NULL;ID3D12Fence* fence=NULL;
     ID3D12DescriptorHeap* srv_heap=NULL;ID3D12Resource* readback=NULL;ID3D12Resource* raw_upload=NULL;
-    HANDLE event=NULL;int software=0,ok=0,stable_binding=0;HRESULT hr=S_OK;
-    PortRTLayoutRead records[48];unsigned count=0,matched=0,expected_bytes=0;u64 total=0;
+    HANDLE event=NULL;int software=0,ok=0,stable_binding=0,alias_binding=0;HRESULT hr=S_OK;
+    ID3D12Debug* debug=NULL;ID3D12InfoQueue* info=NULL;unsigned validation_errors=0;
+    PortRTLayoutRead records[64];unsigned count=0,matched=0,expected_bytes=0;u64 total=0;
     u8 expected[1024];for(unsigned i=0;i<sizeof(expected);i++)expected[i]=(u8)(i*29+7);
     const u32 address=0x30000;memcpy(vm_base+address,expected,sizeof(expected));
 #define RT_LAYOUT_TRY(call) do {hr=(call);if(FAILED(hr))goto cleanup;} while(0)
+    int debug_enabled=SUCCEEDED(D3D12GetDebugInterface(&IID_ID3D12Debug,(void**)&debug));
+    if(debug_enabled){debug->lpVtbl->EnableDebugLayer(debug);debug->lpVtbl->Release(debug);debug=NULL;}
     hr=D3D12CreateDevice(NULL,D3D_FEATURE_LEVEL_11_0,&IID_ID3D12Device,(void**)&device);
     if(FAILED(hr)) {
         software=1;RT_LAYOUT_TRY(CreateDXGIFactory1(&IID_IDXGIFactory4,(void**)&factory));
@@ -55,6 +58,7 @@ int port_check_rt_layouts_gpu(void)
         RT_LAYOUT_TRY(D3D12CreateDevice((IUnknown*)warp,D3D_FEATURE_LEVEL_11_0,&IID_ID3D12Device,(void**)&device));
     }
     s_d3d.device=device;
+    if(debug_enabled)RT_LAYOUT_TRY(device->lpVtbl->QueryInterface(device,&IID_ID3D12InfoQueue,(void**)&info));
     D3D12_COMMAND_QUEUE_DESC qd={0};qd.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;
     RT_LAYOUT_TRY(device->lpVtbl->CreateCommandQueue(device,&qd,&IID_ID3D12CommandQueue,&queue));
     RT_LAYOUT_TRY(device->lpVtbl->CreateCommandAllocator(device,qd.Type,&IID_ID3D12CommandAllocator,&allocator));
@@ -65,12 +69,12 @@ int port_check_rt_layouts_gpu(void)
     D3D12_DESCRIPTOR_HEAP_DESC hd={0};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;hd.NumDescriptors=DRAW_SRV_BASE+PORT_TEXTURE_UNITS;
     RT_LAYOUT_TRY(device->lpVtbl->CreateDescriptorHeap(device,&hd,&IID_ID3D12DescriptorHeap,&srv_heap));
     s_d3d.srv_heap=srv_heap;s_d3d.srv_inc=device->lpVtbl->GetDescriptorHandleIncrementSize(device,hd.Type);
-    readback=port_rt_buffer(48*4096,D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST,0);
+    readback=port_rt_buffer(64*4096,D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST,0);
     D3D12DrawRecord a={0},narrow={0},packed={0},large={0};
     a.is_vp=1;a.rt_off=0x9000;a.rt_w=a.rt_h=4;a.rt_fmt=0x108;a.color[0].address=address;a.color[0].pitch=32;
     narrow=a;narrow.rt_w=narrow.rt_h=2;packed=a;packed.color[0].pitch=16;large=a;large.rt_w=large.rt_h=8;large.color[0].pitch=64;
     int targets[4];port_rt_targets(&a,targets);int slot=targets[0];if(slot<0)goto cleanup;
-#define RT_LAYOUT_CAPTURE(mip,pitch,offset,morton) do {if(count>=48)abort();port_rt_layout_capture(slot,mip,readback,expected,pitch,offset,morton,&records[count++],&total);} while(0)
+#define RT_LAYOUT_CAPTURE(mip,pitch,offset,morton) do {if(count>=64)abort();port_rt_layout_capture(slot,mip,readback,expected,pitch,offset,morton,&records[count++],&total);} while(0)
     RT_LAYOUT_CAPTURE(0,32,0,0);
     const float red[4]={1,0,0,1},green[4]={0,1,0,1},blue[4]={0,0,1,1},white[4]={1,1,1,1},magenta[4]={1,0,1,1},yellow[4]={1,1,0,1};
     const u8 rb[4]={255,0,0,255},gb[4]={0,255,0,255},bb[4]={0,0,255,255},wb[4]={255,255,255,255},mb[4]={255,0,255,255};
@@ -142,9 +146,72 @@ int port_check_rt_layouts_gpu(void)
         const float* color=(i&1)?red:green;const u8* bytes=(i&1)?rb:gb;
         list->lpVtbl->ClearRenderTargetView(list,off_rt_rtv(other),color,0,NULL);port_rt_mark_dirty(other);
         u8 other_expected[64];port_rt_layout_rgba(other_expected,16,4,4,0,0,4,4,bytes);
-        if(count>=48)abort();port_rt_layout_capture(other,0,readback,other_expected,16,0,0,&records[count++],&total);
+        if(count>=64)abort();port_rt_layout_capture(other,0,readback,other_expected,16,0,0,&records[count++],&total);
     }
     if(off_rt_find(address)!=slot || s_d3d.off_rt_count!=21)goto cleanup;
+    /* Distinct base EAs refer to overlapping guest bytes. Native resources
+     * must exchange actual GPU writes, including cached views and padding. */
+    const u32 alias_base=0x70000;u8 overlap[512];
+    for(unsigned i=0;i<sizeof(overlap);i++)overlap[i]=(u8)(i*17+11);
+    memcpy(vm_base+alias_base,overlap,sizeof(overlap));
+    int alias_a=off_rt_get(alias_base+32,alias_base+32,32,4,4,0x108);
+    off_rt_transition(alias_a,D3D12_RESOURCE_STATE_RENDER_TARGET);
+    list->lpVtbl->ClearRenderTargetView(list,off_rt_rtv(alias_a),red,0,NULL);port_rt_mark_dirty(alias_a);
+    port_rt_layout_rgba(overlap+32,32,4,4,0,0,4,4,rb);
+    memset(vm_base+alias_base,0xCD,sizeof(overlap));
+#define RT_ALIAS_CAPTURE(index,offset) do {if(count>=64)abort();port_rt_layout_capture(index,0,readback,overlap+(offset),32,0,0,&records[count++],&total);} while(0)
+    RT_ALIAS_CAPTURE(alias_a,32);
+    int alias_b=off_rt_get(alias_base+36,alias_base+36,32,2,2,0x108);
+    RT_ALIAS_CAPTURE(alias_b,36);
+    off_rt_transition(alias_b,D3D12_RESOURCE_STATE_RENDER_TARGET);
+    list->lpVtbl->ClearRenderTargetView(list,off_rt_rtv(alias_b),green,0,NULL);port_rt_mark_dirty(alias_b);
+    port_rt_layout_rgba(overlap+36,32,2,2,0,0,2,2,gb);
+    if(off_rt_get(alias_base+32,alias_base+32,32,4,4,0x108)!=alias_a)goto cleanup;
+    RT_ALIAS_CAPTURE(alias_a,32);
+    off_rt_transition(alias_a,D3D12_RESOURCE_STATE_RENDER_TARGET);D3D12_RECT blue_pixel={2,1,3,2};
+    list->lpVtbl->ClearRenderTargetView(list,off_rt_rtv(alias_a),blue,1,&blue_pixel);port_rt_mark_dirty(alias_a);
+    port_rt_layout_rgba(overlap+32,32,4,4,2,1,3,2,bb);
+    if(off_rt_get(alias_base+36,alias_base+36,32,2,2,0x108)!=alias_b)goto cleanup;
+    RT_ALIAS_CAPTURE(alias_b,36);
+    /* The prefix is previously unseen CPU memory; the overlap is GPU-owned. */
+    memset(overlap,0xCD,32);
+    int alias_c=off_rt_get(alias_base,alias_base,32,4,4,0x108);
+    RT_ALIAS_CAPTURE(alias_c,0);
+    off_rt_transition(alias_c,D3D12_RESOURCE_STATE_RENDER_TARGET);D3D12_RECT column={0,0,1,4};
+    list->lpVtbl->ClearRenderTargetView(list,off_rt_rtv(alias_c),white,1,&column);port_rt_mark_dirty(alias_c);
+    port_rt_layout_rgba(overlap,32,4,4,0,0,1,4,wb);
+    if(off_rt_get(alias_base+32,alias_base+32,32,4,4,0x108)!=alias_a)goto cleanup;
+    RT_ALIAS_CAPTURE(alias_a,32);
+    /* Growth joins existing GPU bytes outside C's previous span and an
+     * uncovered CPU tail. Neither the old prefix nor A's tail may be lost. */
+    memset(overlap+160,0xCD,96);
+    if(off_rt_get(alias_base,alias_base,32,4,8,0x108)!=alias_c)goto cleanup;
+    RT_ALIAS_CAPTURE(alias_c,0);
+    /* The actual sampler resolver must discover an interior GPU address, not
+     * only exact cache keys. Reinterpret these bytes as half-float channels. */
+    D3D12DrawRecord interior={0};interior.tex[15].set=1;interior.tex[15].raw=alias_base+40;
+    interior.tex[15].off=alias_base+40;interior.tex[15].w=1;interior.tex[15].h=2;
+    interior.tex[15].fmt=0xBA;interior.tex[15].source_pitch=32;
+    port_resolve_texture_unit(&interior,0,15);
+    int alias_d=interior.tex_rt[15];
+    alias_binding=alias_d>=0 && interior.tex_resource[15]==s_d3d.off_rt[alias_d].res;
+    if(!alias_binding)goto cleanup;
+    RT_ALIAS_CAPTURE(alias_d,40);
+    /* A small active view still retains a larger backing. Writes in its
+     * inactive tail must survive a subsequent publication of the small view. */
+    if(off_rt_get(alias_base,alias_base,32,2,1,0x108)!=alias_c)goto cleanup;
+    int tail_alias=off_rt_get(alias_base+192,alias_base+192,32,2,2,0x108);
+    off_rt_transition(tail_alias,D3D12_RESOURCE_STATE_RENDER_TARGET);
+    list->lpVtbl->ClearRenderTargetView(list,off_rt_rtv(tail_alias),white,0,NULL);port_rt_mark_dirty(tail_alias);
+    port_rt_layout_rgba(overlap+192,32,2,2,0,0,2,2,wb);
+    if(off_rt_get(alias_base,alias_base,32,2,1,0x108)!=alias_c)goto cleanup;
+    off_rt_transition(alias_c,D3D12_RESOURCE_STATE_RENDER_TARGET);
+    list->lpVtbl->ClearRenderTargetView(list,off_rt_rtv(alias_c),blue,0,NULL);port_rt_mark_dirty(alias_c);
+    port_rt_layout_rgba(overlap,32,2,1,0,0,2,1,bb);
+    if(off_rt_get(alias_base+192,alias_base+192,32,2,2,0x108)!=tail_alias)goto cleanup;
+    RT_ALIAS_CAPTURE(tail_alias,192);
+    if(off_rt_get(alias_base,alias_base,32,4,8,0x108)!=alias_c)goto cleanup;
+    RT_ALIAS_CAPTURE(alias_c,0);
     RT_LAYOUT_TRY(list->lpVtbl->Close(list));ID3D12CommandList* lists[]={(ID3D12CommandList*)list};
     queue->lpVtbl->ExecuteCommandLists(queue,1,lists);port_rt_require(queue->lpVtbl->Signal(queue,fence,1));s_d3d.fence_values[0]=1;
     port_rt_require(fence->lpVtbl->SetEventOnCompletion(fence,1,event));if(WaitForSingleObject(event,10000)!=WAIT_OBJECT_0)abort();
@@ -155,26 +222,41 @@ int port_check_rt_layouts_gpu(void)
     RT_LAYOUT_TRY(list->lpVtbl->Reset(list,allocator,NULL));
     if(off_rt_get(0x9000,address,32,4,4,0x10D)!=slot)goto cleanup;
     RT_LAYOUT_CAPTURE(0,32,0,0);
+    if(off_rt_get(alias_base+36,alias_base+36,32,2,2,0x108)!=alias_b)goto cleanup;
+    off_rt_transition(alias_b,D3D12_RESOURCE_STATE_RENDER_TARGET);
+    list->lpVtbl->ClearRenderTargetView(list,off_rt_rtv(alias_b),yellow,0,NULL);port_rt_mark_dirty(alias_b);
+    const u8 yb[4]={255,255,0,255};port_rt_layout_rgba(overlap+36,32,2,2,0,0,2,2,yb);
+    if(off_rt_get(alias_base+32,alias_base+32,32,4,4,0x108)!=alias_a)goto cleanup;
+    RT_ALIAS_CAPTURE(alias_a,32);
     RT_LAYOUT_TRY(list->lpVtbl->Close(list));
     queue->lpVtbl->ExecuteCommandLists(queue,1,lists);port_rt_require(queue->lpVtbl->Signal(queue,fence,2));s_d3d.fence_values[0]=2;
     port_rt_require(fence->lpVtbl->SetEventOnCompletion(fence,2,event));if(WaitForSingleObject(event,10000)!=WAIT_OBJECT_0)abort();
+    if(info)for(UINT64 i=0;i<info->lpVtbl->GetNumStoredMessages(info);i++) {
+        SIZE_T size=0;info->lpVtbl->GetMessage(info,i,NULL,&size);
+        D3D12_MESSAGE* message=(D3D12_MESSAGE*)malloc(size);if(!message)abort();
+        if(SUCCEEDED(info->lpVtbl->GetMessage(info,i,message,&size)) && message->Severity<=D3D12_MESSAGE_SEVERITY_ERROR) {
+            validation_errors++;fprintf(stderr,"[rt-layout-test] D3D12 id=%u %s\n",message->ID,message->pDescription);
+        }
+        free(message);
+    }
     u8* bytes=NULL;D3D12_RANGE range={0,(SIZE_T)total};RT_LAYOUT_TRY(readback->lpVtbl->Map(readback,0,&range,(void**)&bytes));
     for(unsigned i=0;i<count;i++)for(unsigned y=0;y<records[i].height;y++)for(unsigned x=0;x<records[i].row_bytes;x++) {
         u8 actual=bytes[records[i].fp.Offset+(size_t)y*records[i].fp.Footprint.RowPitch+x];
         u8 wanted=records[i].expected[y*records[i].row_bytes+x];expected_bytes++;
         if(actual==wanted)matched++;else if(expected_bytes-matched<=8)fprintf(stderr,"[rt-layout-test] record=%u row=%u byte=%u actual=%02X expected=%02X\n",i,y,x,actual,wanted);
     }
-    readback->lpVtbl->Unmap(readback,0,NULL);ok=stable_binding && matched==expected_bytes;
+    readback->lpVtbl->Unmap(readback,0,NULL);ok=stable_binding && alias_binding && matched==expected_bytes && !validation_errors;
 cleanup:
-    fprintf(stderr,"[compat-check] RT layouts GPU device=%s ordered-binding=%d records=%u bytes=%u/%u %s hr=%08lX\n",
-        software?"WARP":"hardware",stable_binding,count,matched,expected_bytes,ok?"PASS":"FAIL",(unsigned long)hr);
+    fprintf(stderr,"[compat-check] RT layouts GPU device=%s ordered-binding=%d interior-alias=%d records=%u bytes=%u/%u debug=%d errors=%u %s hr=%08lX\n",
+        software?"WARP":"hardware",stable_binding,alias_binding,count,matched,expected_bytes,debug_enabled,validation_errors,ok?"PASS":"FAIL",(unsigned long)hr);
     port_destroy_retired_rts();port_rt_storage_release();memset(&s_d3d,0,sizeof(s_d3d));if(event)CloseHandle(event);
 #define RT_LAYOUT_RELEASE(p) if(p)p->lpVtbl->Release(p)
     RT_LAYOUT_RELEASE(readback);RT_LAYOUT_RELEASE(raw_upload);RT_LAYOUT_RELEASE(srv_heap);
     RT_LAYOUT_RELEASE(list);RT_LAYOUT_RELEASE(allocator);RT_LAYOUT_RELEASE(queue);RT_LAYOUT_RELEASE(fence);
-    RT_LAYOUT_RELEASE(device);RT_LAYOUT_RELEASE(warp);RT_LAYOUT_RELEASE(factory);
+    RT_LAYOUT_RELEASE(info);RT_LAYOUT_RELEASE(device);RT_LAYOUT_RELEASE(warp);RT_LAYOUT_RELEASE(factory);
 #undef RT_LAYOUT_RELEASE
 #undef RT_LAYOUT_CAPTURE
+#undef RT_ALIAS_CAPTURE
 #undef RT_LAYOUT_TRY
     return ok?0:1;
 }

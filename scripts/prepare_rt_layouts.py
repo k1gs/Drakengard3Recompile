@@ -17,7 +17,7 @@ def prepare(text):
     ID3D12Resource*        transfer;
     u64                   backing_size, transfer_size;
     D3D12_RESOURCE_STATES backing_state, transfer_state;
-    int                   dirty;''')
+    int                   dirty, stale;''')
     once('    int tex_rt[PORT_TEXTURE_UNITS];      /* pre-pass: OffRT index sampled by unit, -1 = none */',
          '    int tex_rt[PORT_TEXTURE_UNITS];\n    ID3D12Resource* tex_resource[PORT_TEXTURE_UNITS];\n    u32 texture_samples;')
     # Pool bounds are metadata counts; the old 16 is only an RTV page size.

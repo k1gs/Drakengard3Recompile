@@ -1,6 +1,6 @@
-/* One canonical guest-byte buffer per base EA. A native texture is a view of
- * that storage, not its identity. Publish a dirty view before replacing it;
- * old command-list resources remain fence-owned in the retirement queue. */
+/* GPU guest-byte stores with coherent overlapping address ranges. A native
+ * texture is a cached view, not the storage identity. Publish prior writers
+ * before resolving another alias; resources remain fence-owned on replacement. */
 static ID3D12RootSignature* port_rt_copy_root;
 static ID3D12PipelineState* port_rt_copy_pso;
 static ID3D12DescriptorHeap** port_rt_pages;
@@ -141,9 +141,25 @@ static u32 port_rt_chain(OffRT* r,rsx_tex_level levels[RSX_MAX_TEXTURE_LEVELS],u
 {
     return port_mip_chain(r->layout_format,r->w,r->h,r->mips,r->source_pitch,levels,span,0);
 }
+static int port_rt_overlap(u32 a,u64 an,u32 b,u64 bn)
+{
+    return an && bn && (u64)a<(u64)b+bn && (u64)b<(u64)a+an;
+}
+static void port_rt_copy_bytes(OffRT* dst,OffRT* src,u64 begin,u64 end)
+{
+    port_rt_buffer_state(src->backing,&src->backing_state,D3D12_RESOURCE_STATE_COPY_SOURCE);
+    port_rt_buffer_state(dst->backing,&dst->backing_state,D3D12_RESOURCE_STATE_COPY_DEST);
+    s_d3d.cmd_list->lpVtbl->CopyBufferRegion(s_d3d.cmd_list,dst->backing,begin-dst->address,
+        src->backing,begin-src->address,end-begin);
+    if(getenv("PORT_RENDER_TRACE")) {
+        static unsigned shown;if(shown++<32)fprintf(stderr,"[rt-alias] GPU bytes %08X->%08X range=%llX+%llu\n",
+            src->address,dst->address,(unsigned long long)begin,(unsigned long long)(end-begin));
+    }
+}
 static void port_rt_publish(OffRT* r)
 {
     if(!r->dirty)return;
+    if(r->stale){fprintf(stderr,"[rt-layout] stale GPU writer ea=%08X\n",r->address);abort();}
     rsx_tex_level levels[RSX_MAX_TEXTURE_LEVELS];u32 span=0;
     if(!port_rt_chain(r,levels,&span))abort();
     D3D12_RESOURCE_DESC desc;r->res->lpVtbl->GetDesc(r->res,&desc);
@@ -156,6 +172,18 @@ static void port_rt_publish(OffRT* r)
     dst.pResource=r->transfer;dst.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;dst.PlacedFootprint=fp;
     s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list,&dst,0,0,0,&src,NULL);
     port_rt_transform(r,&levels[0],&fp,1);port_rt_native_state(r,old);r->dirty=0;
+    /* All stores were coherent before this writer was bound. Replicate the
+     * shared bytes in GPU order and invalidate native views, never CPU bytes.
+     * A second dirty overlapping view would mean unsynchronized MRT writes. */
+    for(unsigned i=0;i<s_d3d.off_rt_count;i++) {
+        OffRT* other=&s_d3d.off_rt[i];
+        if(other==r || !port_rt_overlap(r->address,r->backing_size,other->address,other->backing_size))continue;
+        if(other->dirty){fprintf(stderr,"[rt-layout] simultaneous dirty aliases %08X/%08X\n",r->address,other->address);abort();}
+        u64 begin=r->address>other->address?r->address:other->address;
+        u64 end=(u64)r->address+r->backing_size,other_end=(u64)other->address+other->backing_size;
+        if(other_end<end)end=other_end;
+        port_rt_copy_bytes(other,r,begin,end);other->stale=1;
+    }
 }
 static void port_rt_grow_backing(OffRT* r,u32 span)
 {
@@ -167,13 +195,31 @@ static void port_rt_grow_backing(OffRT* r,u32 span)
     D3D12_RESOURCE_STATES state=D3D12_RESOURCE_STATE_COMMON;
     port_rt_buffer_state(backing,&state,D3D12_RESOURCE_STATE_COPY_DEST);
     if(old){port_rt_buffer_state(old,&r->backing_state,D3D12_RESOURCE_STATE_COPY_SOURCE);s_d3d.cmd_list->lpVtbl->CopyBufferRegion(s_d3d.cmd_list,backing,0,old,0,old_size);}
-    /* Only previously unrepresented bytes come from RAM. The prefix is the
-     * real GPU buffer, including bytes outside an intervening smaller view. */
-    u64 tail=span-old_size;ID3D12Resource* upload=port_rt_buffer(tail,D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ,0);
-    void* mapped=NULL;D3D12_RANGE none={0,0};port_rt_require(upload->lpVtbl->Map(upload,0,&none,&mapped));
-    memcpy(mapped,vm_base+(u64)r->address+old_size,(size_t)tail);upload->lpVtbl->Unmap(upload,0,NULL);
-    s_d3d.cmd_list->lpVtbl->CopyBufferRegion(s_d3d.cmd_list,backing,old_size,upload,0,tail);
     r->backing=backing;r->backing_size=span;r->backing_state=state;
+    /* Import covered tail intervals from existing GPU stores. Only gaps that
+     * have never been represented by any store are initialized from RAM. */
+    ID3D12Resource* upload=NULL;u8* mapped=NULL;u64 cursor=(u64)r->address+old_size,limit=(u64)r->address+span;
+    while(cursor<limit) {
+        OffRT* owner=NULL;u64 next=limit;
+        for(unsigned i=0;i<s_d3d.off_rt_count;i++) {
+            OffRT* other=&s_d3d.off_rt[i];if(other==r || !other->backing_size)continue;
+            u64 end=(u64)other->address+other->backing_size;
+            if(other->address<=cursor && cursor<end){owner=other;if(end<next)next=end;break;}
+            if(other->address>cursor && other->address<next)next=other->address;
+        }
+        if(owner)port_rt_copy_bytes(r,owner,cursor,next);
+        else {
+            if(!upload) {
+                upload=port_rt_buffer(span-old_size,D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ,0);
+                D3D12_RANGE none={0,0};port_rt_require(upload->lpVtbl->Map(upload,0,&none,(void**)&mapped));
+            }
+            u64 offset=cursor-r->address-old_size;
+            memcpy(mapped+offset,vm_base+cursor,(size_t)(next-cursor));
+            s_d3d.cmd_list->lpVtbl->CopyBufferRegion(s_d3d.cmd_list,backing,cursor-r->address,upload,offset,next-cursor);
+        }
+        cursor=next;
+    }
+    if(upload)upload->lpVtbl->Unmap(upload,0,NULL);
     port_retire_resources(old,upload);
 }
 static void port_rt_import(OffRT* r,const rsx_tex_level* levels,unsigned count)
@@ -200,17 +246,25 @@ static int port_rt_get_view(u32 off,u32 address,u32 pitch,u32 w,u32 h,DXGI_FORMA
         fprintf(stderr,"[rt-layout] unsupported layout ea=%08X %ux%u pitch=%u fmt=%u layout=%02X\n",address,w,h,pitch,(unsigned)format,layout);abort();
     }
     u32 effective_pitch=linear?(pitch?pitch:w*bpp):0;
-    int slot=off_rt_find(address);
-    if(slot<0){port_rt_reserve(s_d3d.off_rt_count+1);slot=(int)s_d3d.off_rt_count++;s_d3d.off_rt[slot].address=address;}
-    OffRT* r=&s_d3d.off_rt[slot];r->used=1;
-    u32 requested_levels=requested?requested:1;
-    if(r->res && r->w==w && r->h==h && r->dxgi==(u32)format && r->source_pitch==effective_pitch && r->layout_format==layout && r->mips==requested_levels)return slot;
     rsx_tex_level levels[RSX_MAX_TEXTURE_LEVELS];u32 span=0;
     u32 count=port_mip_chain(layout,w,h,requested,effective_pitch,levels,&span,0);if(!count)abort();
+    int slot=off_rt_find(address);
+    /* Include a retained larger backing, even when the active view shrank.
+     * Otherwise a writer outside that smaller view could leave stale padding
+     * that a later full-store publication would copy over newer GPU bytes. */
+    u64 sync_span=slot>=0 && s_d3d.off_rt[slot].backing_size>span?s_d3d.off_rt[slot].backing_size:span;
+    for(unsigned i=0;i<s_d3d.off_rt_count;i++)if((int)i!=slot && s_d3d.off_rt[i].dirty &&
+        port_rt_overlap(address,sync_span,s_d3d.off_rt[i].address,s_d3d.off_rt[i].backing_size))port_rt_publish(&s_d3d.off_rt[i]);
+    if(slot<0){port_rt_reserve(s_d3d.off_rt_count+1);slot=(int)s_d3d.off_rt_count++;s_d3d.off_rt[slot].address=address;}
+    OffRT* r=&s_d3d.off_rt[slot];r->used=1;
+    if(r->res && r->w==w && r->h==h && r->dxgi==(u32)format && r->source_pitch==effective_pitch && r->layout_format==layout && r->mips==count) {
+        if(r->stale){port_rt_native_state(r,D3D12_RESOURCE_STATE_COPY_DEST);port_rt_import(r,levels,count);r->stale=0;}
+        return slot;
+    }
     port_rt_publish(r);
     port_retire_resources(r->res,r->up);r->res=NULL;r->up=NULL;
     port_rt_grow_backing(r,span);
-    r->off=off;r->w=w;r->h=h;r->dxgi=(u32)format;r->source_pitch=effective_pitch;r->layout_format=layout;r->mips=count;r->dirty=0;
+    r->off=off;r->w=w;r->h=h;r->dxgi=(u32)format;r->source_pitch=effective_pitch;r->layout_format=layout;r->mips=count;r->dirty=0;r->stale=0;
     D3D12_RESOURCE_DESC d={0};d.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;d.Width=w;d.Height=h;
     d.DepthOrArraySize=1;d.MipLevels=(UINT16)count;d.SampleDesc.Count=1;d.Format=format;d.Flags=D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
     D3D12_HEAP_PROPERTIES hp={0};hp.Type=D3D12_HEAP_TYPE_DEFAULT;
@@ -239,6 +293,11 @@ static void port_rt_targets(const D3D12DrawRecord* dr,int slots[4])
         if(slots[i]>=0)for(unsigned j=0;j<i;j++)if(slots[j]==slots[i] && dr->color[j].pitch!=dr->color[i].pitch) {
             fprintf(stderr,"[rt-layout] incompatible simultaneous MRT aliases ea=%08X\n",dr->color[i].address);abort();
         }
+        if(slots[i]>=0)for(unsigned j=0;j<i;j++)if(slots[j]>=0 && slots[j]!=slots[i] &&
+            port_rt_overlap(s_d3d.off_rt[slots[j]].address,s_d3d.off_rt[slots[j]].backing_size,
+                            s_d3d.off_rt[slots[i]].address,s_d3d.off_rt[slots[i]].backing_size)) {
+            fprintf(stderr,"[rt-layout] overlapping simultaneous MRT ranges %08X/%08X\n",dr->color[j].address,dr->color[i].address);abort();
+        }
     }
     /* Texture resolution may have read the same native resource. Restore its
      * output state even when the cached OM indices/handles did not change. */
@@ -250,7 +309,16 @@ static void port_rt_mark_dirty(int slot)
 }
 static int port_rt_texture_view(D3D12DrawRecord* dr,unsigned unit)
 {
-    int slot=off_rt_find(dr->tex[unit].off);if(slot<0)return -1;
+    int found=off_rt_find(dr->tex[unit].off)>=0;
+    rsx_tex_level levels[RSX_MAX_TEXTURE_LEVELS];u32 span=0;
+    if(!port_mip_chain(dr->tex[unit].fmt,dr->tex[unit].w,dr->tex[unit].h,dr->tex[unit].mips,
+                       dr->tex[unit].source_pitch,levels,&span,dr->tex[unit].cube)) {
+        if(found){fprintf(stderr,"[rt-layout] invalid alias texture layout ea=%08X\n",dr->tex[unit].off);abort();}
+        return -1;
+    }
+    for(unsigned i=0;i<s_d3d.off_rt_count;i++)if(port_rt_overlap(dr->tex[unit].off,(u64)span*(dr->tex[unit].cube?6:1),
+        s_d3d.off_rt[i].address,s_d3d.off_rt[i].backing_size)){found=1;break;}
+    if(!found)return -1;
     if(dr->tex[unit].cube){fprintf(stderr,"[rt-layout] cube alias unsupported ea=%08X\n",dr->tex[unit].off);abort();}
     rsx_tex_layout layout;rsx_texture_layout(dr->tex[unit].fmt,dr->tex[unit].w,dr->tex[unit].h,&layout);
     DXGI_FORMAT format=port_mip_format(&layout);port_rt_bpp(format);
