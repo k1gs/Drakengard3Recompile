@@ -150,7 +150,11 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/checks/color_surfaces_gpu.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_rt_layouts.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/renderer_rt_layouts.inc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/checks/rt_layouts_gpu.inc")
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/rt_layouts_gpu.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_nv0039.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/depth_surfaces_gpu.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/nv0039.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/nv0039.inc")
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 execute_process(COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_ppu_vmx.py"

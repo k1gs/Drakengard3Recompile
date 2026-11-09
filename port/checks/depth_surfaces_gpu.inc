@@ -36,6 +36,12 @@ int port_check_depth_surfaces_gpu(void)
     D3D12_CPU_DESCRIPTOR_HANDLE va=port_depth_view(&a),vb=port_depth_view(&b),v16=port_depth_view(&d16);
     D3D12_CPU_DESCRIPTOR_HANDLE va_again=port_depth_view(&a);
     if(port_depth_count!=3 || va.ptr!=va_again.ptr || va.ptr==vb.ptr || va.ptr==v16.ptr) goto cleanup;
+    extern int port_renderer_guest_range_owned(u32,u32);
+    for(unsigned i=0;i<port_depth_count;i++) {
+        const PortDepthKey* key=&port_depth_surfaces[i].key;
+        u32 last=key->address+key->width*key->height*(key->format==1?2:4)-1;
+        if(!port_renderer_guest_range_owned(key->address,1) || !port_renderer_guest_range_owned(last,1))goto cleanup;
+    }
     list->lpVtbl->OMSetRenderTargets(list,0,NULL,FALSE,&va);
     a.is_clear=1;a.clear_flags=3;
     list->lpVtbl->ClearDepthStencilView(list,va,port_depth_clear_flags(&a),0.25f,11,0,NULL);

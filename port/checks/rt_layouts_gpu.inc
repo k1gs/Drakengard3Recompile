@@ -149,6 +149,8 @@ int port_check_rt_layouts_gpu(void)
         if(count>=64)abort();port_rt_layout_capture(other,0,readback,other_expected,16,0,0,&records[count++],&total);
     }
     if(off_rt_find(address)!=slot || s_d3d.off_rt_count!=21)goto cleanup;
+    extern int port_check_nv0039_gpu_guard(u32,u32);
+    if(!port_check_nv0039_gpu_guard(address,0xA0000))goto cleanup;
     /* Distinct base EAs refer to overlapping guest bytes. Native resources
      * must exchange actual GPU writes, including cached views and padding. */
     const u32 alias_base=0x70000;u8 overlap[512];

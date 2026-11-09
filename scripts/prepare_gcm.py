@@ -1,5 +1,6 @@
 """Preserve pending GPU commands and expose their real IO mapping for diagnosis."""
 import re
+from prepare_nv0039 import prepare as prepare_nv0039
 
 
 def prepare(sdk, output):
@@ -217,6 +218,7 @@ void port_gcm_contract_default_context(u32 context) {
     vm_write32(s_gcm_ctx_out_ea,context);
 }
 '''
+    text=prepare_nv0039(text)
     target=output/'cellGcmSys_compat.c'
     if not target.exists() or target.read_text(encoding='utf-8')!=text:
         target.write_text(text,encoding='utf-8')

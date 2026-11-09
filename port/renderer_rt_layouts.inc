@@ -145,6 +145,21 @@ static int port_rt_overlap(u32 a,u64 an,u32 b,u64 bn)
 {
     return an && bn && (u64)a<(u64)b+bn && (u64)b<(u64)a+an;
 }
+/* FIFO memory engines may only use RAM when no native GPU store owns bytes
+ * in the requested range. Their caller first submits pending draw records. */
+int port_renderer_guest_range_owned(u32 ea,u32 bytes)
+{
+    extern int port_gcm_display_range_owned(u32,u32);
+    if(port_gcm_display_range_owned(ea,bytes))return 1;
+    for(unsigned i=0;i<s_d3d.off_rt_count;i++)if(port_rt_overlap(ea,bytes,
+        s_d3d.off_rt[i].address,s_d3d.off_rt[i].backing_size))return 1;
+    for(unsigned i=0;i<port_depth_count;i++) {
+        const PortDepthKey* k=&port_depth_surfaces[i].key;
+        u64 pitch=(u64)k->width*(k->format==1?2:4);if(k->pitch>pitch)pitch=k->pitch;
+        if(port_rt_overlap(ea,bytes,k->address,pitch*k->height))return 1;
+    }
+    return 0;
+}
 static void port_rt_copy_bytes(OffRT* dst,OffRT* src,u64 begin,u64 end)
 {
     port_rt_buffer_state(src->backing,&src->backing_state,D3D12_RESOURCE_STATE_COPY_SOURCE);
