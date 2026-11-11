@@ -66,6 +66,7 @@ int port_check_rt_layouts_gpu(void)
     RT_LAYOUT_TRY(device->lpVtbl->CreateFence(device,0,D3D12_FENCE_FLAG_NONE,&IID_ID3D12Fence,&fence));
     event=CreateEventA(NULL,FALSE,FALSE,NULL);if(!event)goto cleanup;
     s_d3d.cmd_list=list;s_d3d.cmd_queue=queue;s_d3d.fence=fence;s_d3d.fence_event=event;
+    s_d3d.cmd_allocators[0]=allocator;
     D3D12_DESCRIPTOR_HEAP_DESC hd={0};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;hd.NumDescriptors=DRAW_SRV_BASE+PORT_TEXTURE_UNITS;
     RT_LAYOUT_TRY(device->lpVtbl->CreateDescriptorHeap(device,&hd,&IID_ID3D12DescriptorHeap,&srv_heap));
     s_d3d.srv_heap=srv_heap;s_d3d.srv_inc=device->lpVtbl->GetDescriptorHandleIncrementSize(device,hd.Type);
@@ -149,8 +150,6 @@ int port_check_rt_layouts_gpu(void)
         if(count>=64)abort();port_rt_layout_capture(other,0,readback,other_expected,16,0,0,&records[count++],&total);
     }
     if(off_rt_find(address)!=slot || s_d3d.off_rt_count!=21)goto cleanup;
-    extern int port_check_nv0039_gpu_guard(u32,u32);
-    if(!port_check_nv0039_gpu_guard(address,0xA0000))goto cleanup;
     /* Distinct base EAs refer to overlapping guest bytes. Native resources
      * must exchange actual GPU writes, including cached views and padding. */
     const u32 alias_base=0x70000;u8 overlap[512];
@@ -230,9 +229,17 @@ int port_check_rt_layouts_gpu(void)
     const u8 yb[4]={255,255,0,255};port_rt_layout_rgba(overlap+36,32,2,2,0,0,2,2,yb);
     if(off_rt_get(alias_base+32,alias_base+32,32,4,4,0x108)!=alias_a)goto cleanup;
     RT_ALIAS_CAPTURE(alias_a,32);
+    /* A later writer through B must be published into A before NV0039 reads
+     * the overlapping range. Leave B dirty across the submission boundary. */
+    off_rt_transition(alias_b,D3D12_RESOURCE_STATE_RENDER_TARGET);
+    list->lpVtbl->ClearRenderTargetView(list,off_rt_rtv(alias_b),blue,0,NULL);
+    port_rt_mark_dirty(alias_b);
+    port_rt_layout_rgba(overlap+36,32,2,2,0,0,2,2,bb);
     RT_LAYOUT_TRY(list->lpVtbl->Close(list));
     queue->lpVtbl->ExecuteCommandLists(queue,1,lists);port_rt_require(queue->lpVtbl->Signal(queue,fence,2));s_d3d.fence_values[0]=2;
     port_rt_require(fence->lpVtbl->SetEventOnCompletion(fence,2,event));if(WaitForSingleObject(event,10000)!=WAIT_OBJECT_0)abort();
+    extern int port_check_nv0039_gpu_source(u32,u32,u32,const u8*);
+    if(!port_check_nv0039_gpu_source(alias_base+32,alias_base-1,0xA0000,overlap+32))goto cleanup;
     if(info)for(UINT64 i=0;i<info->lpVtbl->GetNumStoredMessages(info);i++) {
         SIZE_T size=0;info->lpVtbl->GetMessage(info,i,NULL,&size);
         D3D12_MESSAGE* message=(D3D12_MESSAGE*)malloc(size);if(!message)abort();

@@ -124,19 +124,38 @@ int port_check_nv0039(void)
         lazy_dest,unbacked_source,main_not_materialized,gpu_not_materialized);
     return deferred&&copied&&padding&&matrix==128&&pages&&rejected==9&&disjoint&&display_guard&&reset&&lazy_dest&&unbacked_source&&main_not_materialized&&gpu_not_materialized?0:1;
 }
-/* Called by the real-GPU fixture while a GPU-written surface exists and its
- * stale RAM remains poisoned. No fake ownership predicate is substituted. */
-int port_check_nv0039_gpu_guard(u32 gpu_ea,u32 scratch)
+/* The producer is a real GPU write. Guest RAM still contains poison bytes. */
+int port_check_nv0039_gpu_source(u32 gpu_ea,u32 outside_ea,u32 scratch,const u8* expected)
 {
-    extern u8* vm_base;CellGcmConfig saved=s_config;PortNv0039 saved_command=port_nv0039;
+    extern u8* vm_base;
+    CellGcmConfig saved=s_config;
+    u16 saved_page=s_ea_address_table[0];
+    s_ea_address_table[0]=1;
     s_config.localAddress=0;s_config.localSize=0xFFFFFFFFu;
-    PortNv0039 command={0xFEED0000u,0xFEED0000u,gpu_ea,scratch,0,0,4,1,0x101};
-    u8 gpu_before[4],cpu_before[4];memcpy(gpu_before,vm_base+gpu_ea,4);
-    memset(vm_base+scratch,0x5A,4);memcpy(cpu_before,vm_base+scratch,4);
-    int source=port_nv0039_copy(&command,0)==PORT_NV_GPU && !memcmp(cpu_before,vm_base+scratch,4);
-    command.in_off=scratch;command.out_off=gpu_ea;
-    int dest=port_nv0039_copy(&command,0)==PORT_NV_GPU && !memcmp(gpu_before,vm_base+gpu_ea,4);
-    s_config=saved;port_nv0039=saved_command;
-    fprintf(stderr,"[compat-check] NV0039 real GPU-owned source=%d destination=%d untouched\n",source,dest);
-    return source&&dest;
+    const u32 main_ea=0x100100;
+    u8 gpu_before[40],want[16];
+    memcpy(gpu_before,vm_base+gpu_ea,sizeof(gpu_before));
+    memset(vm_base+scratch,0x5A,16);
+    memset(vm_base+main_ea,0x5A,16);
+    PortNv0039 local={0xFEED0000u,0xFEED0000u,gpu_ea,scratch,0,0,16,1,0x101};
+    int contiguous=port_nv0039_copy(&local,0)==PORT_NV_COPY &&
+        !memcmp(expected,vm_base+scratch,16);
+    PortNv0039 main={0xFEED0000u,0xFEED0001u,gpu_ea+33,0x100,(u32)-32,8,4,2,0x202};
+    memset(want,0x5A,sizeof(want));
+    for(unsigned i=0;i<4;i++) {
+        want[i*2]=expected[33+i*2];
+        want[8+i*2]=expected[1+i*2];
+    }
+    int strided=port_nv0039_copy(&main,0)==PORT_NV_COPY && !memcmp(want,vm_base+main_ea,16);
+    PortNv0039 mixed=local;
+    mixed.in_off=outside_ea;
+    int partial=port_nv0039_copy(&mixed,0)==PORT_NV_GPU && !memcmp(expected,vm_base+scratch,16);
+    local.in_off=scratch;local.out_off=gpu_ea;
+    int dest=port_nv0039_copy(&local,0)==PORT_NV_GPU;
+    int ram_untouched=!memcmp(gpu_before,vm_base+gpu_ea,sizeof(gpu_before));
+    s_config=saved;
+    s_ea_address_table[0]=saved_page;
+    fprintf(stderr,"[compat-check] NV0039 GPU readback local=%d main-strided=%d mixed-rejected=%d destination-rejected=%d RAM-untouched=%d\n",
+        contiguous,strided,partial,dest,ram_untouched);
+    return contiguous && strided && partial && dest && ram_untouched;
 }

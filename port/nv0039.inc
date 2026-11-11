@@ -1,8 +1,9 @@
-/* NV0039 byte-column copies for ordinary guest memory. GPU-owned ranges and
- * report DMA objects need their real producer/readback path, never stale RAM. */
+/* NV0039 byte-column copies into ordinary guest memory. Color surfaces are
+ * read from GPU backing. Depth, display and report DMA stay unsupported. */
 /* Register/byte-stride reference (independent implementation below):
  * https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/RSX/NV47/HW/nv0039.cpp */
 extern int port_renderer_guest_range_owned(u32,u32);
+extern u8* port_renderer_read_color(u32,u32);
 extern u32 cellGcmResolveIO(u32);
 typedef struct {
     u32 in_dma,out_dma,in_off,out_off,in_pitch,out_pitch,width,lines,format;
@@ -78,15 +79,17 @@ static int port_nv0039_row(u32 offset,u32 pitch,u32 row,u64 bytes,u32* result)
     if(at<0 || (u64)at+bytes>0x100000000ull)return 0;
     *result=(u32)at;return 1;
 }
-static int port_nv0039_span(u32 dma,u32 offset,u64 bytes,int write,u64* low,u64* high)
+static int port_nv0039_span(u32 dma,u32 offset,u64 bytes,int write,u64* low,u64* high,int* gpu_source)
 {
     while(bytes) {
         u32 chunk=(u32)(0x100000u-(offset&0xFFFFFu));if(chunk>bytes)chunk=(u32)bytes;
         u32 ea=port_nv0039_ea(dma,offset);
         if(dma==0xFEED0000u && (u64)offset+chunk>s_config.localSize)return PORT_NV_MAP;
         if(!ea || (u64)ea+chunk>0x100000000ull)return PORT_NV_MAP;
-        if(port_renderer_guest_range_owned(ea,chunk))return PORT_NV_GPU;
-        if(!port_nv0039_host(ea,chunk,write,dma==0xFEED0000u))return PORT_NV_MAP;
+        if(port_renderer_guest_range_owned(ea,chunk)) {
+            if(write)return PORT_NV_GPU;
+            *gpu_source=1;
+        } else if(!port_nv0039_host(ea,chunk,write,dma==0xFEED0000u))return PORT_NV_MAP;
         if(ea<*low)*low=ea;if((u64)ea+chunk>*high)*high=(u64)ea+chunk;
         offset+=chunk;bytes-=chunk;
     }
@@ -105,18 +108,26 @@ static int port_nv0039_copy(const PortNv0039* p,u32 notify)
     port_renderer_submit_pending();
     u64 in_bytes=(u64)(p->width-1)*in+1,out_bytes=(u64)(p->width-1)*out+1;
     u64 src_low=0x100000000ull,src_high=0,dst_low=0x100000000ull,dst_high=0;
+    int gpu_source=0;
     for(u32 row=0;row<p->lines;row++) {
         u32 src,dst;
         if(!port_nv0039_row(p->in_off,p->in_pitch,row,in_bytes,&src) ||
            !port_nv0039_row(p->out_off,p->out_pitch,row,out_bytes,&dst))return PORT_NV_MAP;
-        int result=port_nv0039_span(p->in_dma,src,in_bytes,0,&src_low,&src_high);
+        int result=port_nv0039_span(p->in_dma,src,in_bytes,0,&src_low,&src_high,&gpu_source);
         if(result!=PORT_NV_COPY)return result;
-        result=port_nv0039_span(p->out_dma,dst,out_bytes,1,&dst_low,&dst_high);
+        result=port_nv0039_span(p->out_dma,dst,out_bytes,1,&dst_low,&dst_high,&gpu_source);
         if(result!=PORT_NV_COPY)return result;
     }
     /* Deliberately disjoint-only. Bounding gaps in discontiguous mappings may
      * reject an otherwise safe case; no guessed overlapping-DMA semantics. */
     if(src_low<dst_high && dst_low<src_high)return PORT_NV_OVERLAP;
+    u8* color=NULL;
+    if(gpu_source) {
+        u64 span=src_high-src_low;
+        if(span>UINT32_MAX)return PORT_NV_GPU;
+        color=port_renderer_read_color((u32)src_low,(u32)span);
+        if(!color)return PORT_NV_GPU;
+    }
     extern u8* vm_base;
     for(u32 row=0;row<p->lines;row++) {
         u32 src,dst;port_nv0039_row(p->in_off,p->in_pitch,row,in_bytes,&src);
@@ -127,11 +138,13 @@ static int port_nv0039_copy(const PortNv0039* p,u32 notify)
             u32 si=(0xFFFFFu-(so&0xFFFFFu))/in+1,di=(0xFFFFFu-(doff&0xFFFFFu))/out+1;
             if(columns>si)columns=si;if(columns>di)columns=di;
             u32 se=port_nv0039_ea(p->in_dma,so),de=port_nv0039_ea(p->out_dma,doff);
-            if(in==1 && out==1)vm_memcpy_to(de,vm_base+se,columns);
-            else for(u32 x=0;x<columns;x++)vm_write8(de+x*out,vm_base[se+x*in]);
+            const u8* source=color?color+(se-src_low):vm_base+se;
+            if(in==1 && out==1)vm_memcpy_to(de,source,columns);
+            else for(u32 x=0;x<columns;x++)vm_write8(de+x*out,source[x*in]);
             port_gcm_notify_write(de,(columns-1)*out+1);column+=columns;
         }
     }
+    free(color);
     return PORT_NV_COPY;
 }
 static int port_nv0039_method(u32 method,u32 value)

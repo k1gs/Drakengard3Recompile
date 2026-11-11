@@ -145,19 +145,24 @@ static int port_rt_overlap(u32 a,u64 an,u32 b,u64 bn)
 {
     return an && bn && (u64)a<(u64)b+bn && (u64)b<(u64)a+an;
 }
-/* FIFO memory engines may only use RAM when no native GPU store owns bytes
- * in the requested range. Their caller first submits pending draw records. */
-int port_renderer_guest_range_owned(u32 ea,u32 bytes)
+static int port_rt_noncolor_owned(u32 ea,u32 bytes)
 {
     extern int port_gcm_display_range_owned(u32,u32);
     if(port_gcm_display_range_owned(ea,bytes))return 1;
-    for(unsigned i=0;i<s_d3d.off_rt_count;i++)if(port_rt_overlap(ea,bytes,
-        s_d3d.off_rt[i].address,s_d3d.off_rt[i].backing_size))return 1;
     for(unsigned i=0;i<port_depth_count;i++) {
         const PortDepthKey* k=&port_depth_surfaces[i].key;
         u64 pitch=(u64)k->width*(k->format==1?2:4);if(k->pitch>pitch)pitch=k->pitch;
         if(port_rt_overlap(ea,bytes,k->address,pitch*k->height))return 1;
     }
+    return 0;
+}
+/* FIFO memory engines may only use RAM when no native GPU store owns bytes
+ * in the requested range. Their caller first submits pending draw records. */
+int port_renderer_guest_range_owned(u32 ea,u32 bytes)
+{
+    if(port_rt_noncolor_owned(ea,bytes))return 1;
+    for(unsigned i=0;i<s_d3d.off_rt_count;i++)if(port_rt_overlap(ea,bytes,
+        s_d3d.off_rt[i].address,s_d3d.off_rt[i].backing_size))return 1;
     return 0;
 }
 static void port_rt_copy_bytes(OffRT* dst,OffRT* src,u64 begin,u64 end)
@@ -353,6 +358,60 @@ static void port_rt_buffers_decay(void)
         s_d3d.off_rt[i].transfer_state=D3D12_RESOURCE_STATE_COMMON;
     }
 }
+
+static void port_rt_wait_for_readback(void)
+{
+    wait_for_gpu();
+    u64 completed=s_d3d.fence->lpVtbl->GetCompletedValue(s_d3d.fence);
+    if(completed==UINT64_MAX || completed<s_d3d.fence_values[s_d3d.frame_index]) {
+        fprintf(stderr,"[rt-layout] color readback fence did not complete\n");
+        abort();
+    }
+}
+
+/* Called on the FIFO owner after pending draws have been submitted. A single
+ * backing must cover the entire source envelope. Publishing overlapping
+ * writers first makes that backing authoritative even if its view is stale. */
+u8* port_renderer_read_color(u32 ea,u32 bytes)
+{
+    if(!bytes || port_rt_noncolor_owned(ea,bytes))return NULL;
+    OffRT* source=NULL;
+    for(unsigned i=0;i<s_d3d.off_rt_count;i++) {
+        OffRT* r=&s_d3d.off_rt[i];
+        if(ea>=r->address && (u64)ea+bytes<=(u64)r->address+r->backing_size) {
+            source=r;
+            break;
+        }
+    }
+    if(!source)return NULL;
+    u8* result=(u8*)malloc(bytes);
+    if(!result)return NULL;
+    ID3D12Resource* readback=port_rt_buffer(bytes,D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST,0);
+    port_rt_wait_for_readback();
+    port_rt_buffers_decay();
+    ID3D12GraphicsCommandList* list=s_d3d.cmd_list;
+    ID3D12CommandAllocator* allocator=s_d3d.cmd_allocators[s_d3d.frame_index];
+    port_rt_require(allocator->lpVtbl->Reset(allocator));
+    port_rt_require(list->lpVtbl->Reset(list,allocator,NULL));
+    for(unsigned i=0;i<s_d3d.off_rt_count;i++) {
+        OffRT* r=&s_d3d.off_rt[i];
+        if(port_rt_overlap(ea,bytes,r->address,r->backing_size))port_rt_publish(r);
+    }
+    port_rt_buffer_state(source->backing,&source->backing_state,D3D12_RESOURCE_STATE_COPY_SOURCE);
+    list->lpVtbl->CopyBufferRegion(list,readback,0,source->backing,ea-source->address,bytes);
+    port_rt_require(list->lpVtbl->Close(list));
+    ID3D12CommandList* lists[]={(ID3D12CommandList*)list};
+    s_d3d.cmd_queue->lpVtbl->ExecuteCommandLists(s_d3d.cmd_queue,1,lists);
+    port_rt_wait_for_readback();
+    void* mapped=NULL;
+    D3D12_RANGE range={0,bytes},written={0,0};
+    port_rt_require(readback->lpVtbl->Map(readback,0,&range,&mapped));
+    memcpy(result,mapped,bytes);
+    readback->lpVtbl->Unmap(readback,0,&written);
+    readback->lpVtbl->Release(readback);
+    return result;
+}
+
 static void port_rt_storage_release(void)
 {
     for(unsigned i=0;i<s_d3d.off_rt_count;i++){
