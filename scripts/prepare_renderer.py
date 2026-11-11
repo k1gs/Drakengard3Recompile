@@ -1,5 +1,6 @@
 """Build-local renderer fixes, capture diagnostics and CPU contract fixtures."""
 import re
+from pathlib import Path
 from prepare_texture_units import prepare as prepare_texture_units
 from prepare_frame_boundaries import prepare as prepare_frame_boundaries
 from prepare_texture_cache import prepare as prepare_texture_cache
@@ -740,6 +741,28 @@ int port_check_renderer_options(void)
     text=prepare_clear(text)
     text=prepare_color_surfaces(text)
     text=prepare_rt_layouts(text)
+    replace('    int   is_clear;', '    u64   zpass_epoch;\n    int   is_clear;')
+    zpass=(Path(__file__).resolve().parents[1]/'port/renderer_zpass.inc').read_text(encoding='utf-8')
+    replace('static void port_rt_storage_release(void)', zpass+'\nstatic void port_rt_storage_release(void)')
+    for record, count in (('dr->', 3), ('s_d3d.draws[s_d3d.draw_count].', 2)):
+        pattern=rf'(?m)^([ ]*)({re.escape(record)}is_clear[ ]*= 0;)'
+        text, actual=re.subn(pattern, lambda match:
+            f'{match[1]}{record}zpass_epoch = port_zpass_draw_epoch();\n{match[1]}{match[2]}', text)
+        if actual!=count:
+            raise ValueError('Pinned ZPASS draw snapshot changed: '+record)
+    replace('pv->fp_addr == fpnow', 'pv->zpass_epoch == port_zpass_draw_epoch() && pv->fp_addr == fpnow', 2)
+    replace('''            s_d3d.cmd_list->lpVtbl->DrawInstanced(
+                s_d3d.cmd_list, dr->vertex_count, 1, start_vert, 0);''',
+            '            port_zpass_draw(dr,start_vert);')
+    replace('''                s_d3d.cmd_list->lpVtbl->DrawInstanced(s_d3d.cmd_list,
+                    dr->vertex_count, 1, dr->vb_byte_offset / 256, 0);''',
+            '                port_zpass_draw(dr,dr->vb_byte_offset / 256);')
+    replace('    wait_for_gpu();\n    port_release_retired_rts();',
+            '    wait_for_gpu();\n    port_zpass_collect();\n    port_release_retired_rts();')
+    replace('    s_d3d.cmd_list->lpVtbl->Close(s_d3d.cmd_list);\n    ID3D12CommandList* cmd_lists[]',
+            '    port_zpass_resolve();\n    s_d3d.cmd_list->lpVtbl->Close(s_d3d.cmd_list);\n    ID3D12CommandList* cmd_lists[]')
+    replace('    port_rt_storage_release();\n    /* Release D3D12 resources */',
+            '    port_zpass_release();\n    port_rt_storage_release();\n    /* Release D3D12 resources */')
     # Warning budgets must never hide a later D3D12 validation error.
     replace('for (UINT64 mi = 0; mi < n && _printed < 80; mi++) {',
             'for (UINT64 mi = 0; mi < n; mi++) {')

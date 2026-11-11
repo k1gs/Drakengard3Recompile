@@ -1,5 +1,6 @@
 """Preserve pending GPU commands and expose their real IO mapping for diagnosis."""
 import re
+from pathlib import Path
 from prepare_nv0039 import prepare as prepare_nv0039
 
 
@@ -219,6 +220,20 @@ void port_gcm_contract_default_context(u32 context) {
 }
 '''
     text=prepare_nv0039(text)
+    report_start=text.index('                    /* NV4097_GET_REPORT:')
+    report_end=text.index('\n                } else\n                    gcm_2d_method', report_start)
+    if '0xFFFFu : 0u' not in text[report_start:report_end]:
+        raise ValueError('Pinned synthetic report handler changed')
+    text=text[:report_start]+'                    port_gcm_report_method(m, vm_read32(dea));'+text[report_end:]
+    report_anchor='static PortNv0039 port_nv0039;'
+    report_reset='    port_nv0039_reset();\n'
+    if text.count(report_anchor)!=1 or text.count(report_reset)!=2:
+        raise ValueError('Pinned GCM report placement changed')
+    report=(Path(__file__).resolve().parents[1]/'port/gcm_zpass.inc').read_text(encoding='utf-8')
+    text=text.replace(report_anchor,report+'\n'+report_anchor)
+    text=text.replace('    port_nv0039_reset();\n    memset(s_report_data,',
+                      '    port_gcm_report_reset();\n    port_nv0039_reset();\n    memset(s_report_data,')
+    text='static void port_gcm_report_reset(void);\n'+text
     target=output/'cellGcmSys_compat.c'
     if not target.exists() or target.read_text(encoding='utf-8')!=text:
         target.write_text(text,encoding='utf-8')

@@ -22,7 +22,11 @@ static int port_stencil_fixture_draw(ID3D12Device* device,ID3D12GraphicsCommandL
     float constants[8]={color[0],color[1],color[2],color[3],z,(float)reverse,0,0};
     list->lpVtbl->SetGraphicsRoot32BitConstants(list,0,8,constants,0);
     D3D12_RECT rect={(LONG)column,0,(LONG)column+1,4};list->lpVtbl->RSSetScissorRects(list,1,&rect);
-    list->lpVtbl->DrawInstanced(list,3,1,0,0);return 1;
+    D3D12DrawRecord draw={0};
+    draw.vertex_count=3;
+    draw.zpass_epoch=port_zpass_draw_epoch();
+    port_zpass_draw(&draw,0);
+    return 1;
 }
 int port_check_stencil_gpu(void)
 {
@@ -37,6 +41,7 @@ int port_check_stencil_gpu(void)
     PortStencilKey invalid;u32 ref;int asymmetric=!port_pack_stencil(&st,&invalid,&ref);
     if(!snapshot || !asymmetric)return 1;
     ID3D12Device* device=NULL;IDXGIFactory4* factory=NULL;IDXGIAdapter* warp=NULL;
+    ID3D12InfoQueue* info=NULL;unsigned validation_errors=0;
     ID3D12CommandQueue* queue=NULL;ID3D12CommandAllocator* allocator=NULL;
     ID3D12GraphicsCommandList* list=NULL;ID3D12Fence* fence=NULL;
     ID3D12DescriptorHeap* heap=NULL;ID3D12Resource* target=NULL;ID3D12Resource* readback=NULL;
@@ -55,12 +60,19 @@ int port_check_stencil_gpu(void)
         STENCIL_TRY(factory->lpVtbl->EnumWarpAdapter(factory,&IID_IDXGIAdapter,(void**)&warp));
         STENCIL_TRY(D3D12CreateDevice((IUnknown*)warp,D3D_FEATURE_LEVEL_11_0,&IID_ID3D12Device,(void**)&device));
     }
+    if(SUCCEEDED(debug_hr))
+        STENCIL_TRY(device->lpVtbl->QueryInterface(device,&IID_ID3D12InfoQueue,(void**)&info));
     D3D12_COMMAND_QUEUE_DESC qd={0};qd.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;
     STENCIL_TRY(device->lpVtbl->CreateCommandQueue(device,&qd,&IID_ID3D12CommandQueue,&queue));
     STENCIL_TRY(device->lpVtbl->CreateCommandAllocator(device,qd.Type,&IID_ID3D12CommandAllocator,&allocator));
     STENCIL_TRY(device->lpVtbl->CreateCommandList(device,0,qd.Type,allocator,NULL,&IID_ID3D12GraphicsCommandList,&list));
     STENCIL_TRY(device->lpVtbl->CreateFence(device,0,D3D12_FENCE_FLAG_NONE,&IID_ID3D12Fence,&fence));
     event=CreateEventA(NULL,FALSE,FALSE,NULL);if(!event) goto cleanup;
+    s_d3d.device=device;s_d3d.cmd_list=list;s_d3d.cmd_queue=queue;
+    s_d3d.fence=fence;s_d3d.fence_event=event;s_d3d.initialized=1;
+    extern void port_gcm_report_method(u32,u32);
+    extern u32 cellGcmGetReport(u32,u32);
+    port_renderer_zpass_reset();
     D3D12_ROOT_PARAMETER param={0};param.ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     param.Constants.Num32BitValues=8;param.ShaderVisibility=D3D12_SHADER_VISIBILITY_ALL;
     D3D12_ROOT_SIGNATURE_DESC rs={0};rs.NumParameters=1;rs.pParameters=&param;
@@ -111,10 +123,15 @@ int port_check_stencil_gpu(void)
 #define BASE() do {rsx_state_init(&st);st.stencil_test_enable=1;} while(0)
 #define PROBE(col,refval,mask,color) do {BASE();st.stencil_func=0x202;st.stencil_ref=refval;st.stencil_mask=mask;port_renderer_stencil_method(0x32C,0);DRAW(col,0,0,0,color);} while(0)
     BASE();st.stencil_ref=0x35;st.stencil_op_zpass=0x1E01;port_renderer_stencil_method(0x32C,0x0F);DRAW(0,0,0,0,black);
+    port_gcm_report_method(0x17CC,1);
     PROBE(0,0xA5,255,red);PROBE(0,0xA6,255,white); /* wrong dynamic ref must fail */
+    port_gcm_report_method(0x1D84,0);
     BASE();st.stencil_ref=0x3B;st.stencil_op_zpass=0x1E01;port_renderer_stencil_method(0x32C,0x0F);DRAW(1,0,0,0,black);
     PROBE(1,0x0B,0x0F,green);
-    BASE();st.stencil_op_zfail=0x1E02;DRAW(2,0.75f,0,1,black);PROBE(2,0xA1,255,blue);
+    port_gcm_report_method(0x1D84,3);
+    BASE();st.stencil_op_zfail=0x1E02;DRAW(2,0.75f,0,1,black);
+    port_gcm_report_method(0x17CC,0);
+    PROBE(2,0xA1,255,blue);
     BASE();st.stencil_func=0x200;st.stencil_op_fail=0;DRAW(3,0,0,0,black);PROBE(3,0,255,yellow);
     BASE();st.stencil_op_zpass=0x150A;DRAW(4,0,0,0,black);PROBE(4,0x5F,255,magenta);
     D3D12_RECT five={5,0,6,4};list->lpVtbl->ClearDepthStencilView(list,dsv,D3D12_CLEAR_FLAG_STENCIL,0,255,1,&five);
@@ -141,13 +158,28 @@ int port_check_stencil_gpu(void)
         dst.pResource=readback;dst.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;dst.PlacedFootprint=fp[i];
         list->lpVtbl->CopyTextureRegion(list,&dst,0,0,0,&src,NULL);
     }
+    const u32 query_count=port_zpass_queries;
+    port_zpass_resolve();
     STENCIL_TRY(list->lpVtbl->Close(list));
     ID3D12CommandList* lists[]={(ID3D12CommandList*)list};queue->lpVtbl->ExecuteCommandLists(queue,1,lists);
     STENCIL_TRY(queue->lpVtbl->Signal(queue,fence,1));STENCIL_TRY(fence->lpVtbl->SetEventOnCompletion(fence,1,event));
     if(WaitForSingleObject(event,5000)!=WAIT_OBJECT_0 || fence->lpVtbl->GetCompletedValue(fence)<1)abort();
+    s_d3d.fence_values[0]=1;
+    port_gcm_report_method(0x1800,0x01000100);
+    u32 samples=cellGcmGetReport(1,16);
+    port_gcm_report_method(0x17C8,1);
+    port_gcm_report_method(0x1800,0x01000110);
+    u32 cleared=cellGcmGetReport(1,17);
+    u32 retained=cellGcmGetReport(1,16);
+    port_gcm_report_method(0x1A8,0xBAD68000u);
+    port_gcm_report_method(0x1800,0x01000100);
+    u32 main_ignored=cellGcmGetReport(1,16);
+    port_gcm_report_method(0x1A8,0x66626660u);
+    fprintf(stderr,"[compat-check] ZPASS queries=%u samples=%u cleared=%u retained=%u main-ignored=%u\n",
+        query_count,samples,cleared,retained,main_ignored);
     unsigned char* data=NULL;D3D12_RANGE range={0,(SIZE_T)total};STENCIL_TRY(readback->lpVtbl->Map(readback,0,&range,(void**)&data));
     static const u8 expected[7][4]={{255,0,0,0xA5},{0,255,0,0xAB},{0,0,255,0xA1},{255,255,0,0},{255,0,255,0x5F},{0,255,255,0},{255,128,0,0xA0}};
-    ok=1;
+    ok=query_count==3 && samples==4 && cleared==0 && retained==4 && main_ignored==4;
     for(unsigned y=0;y<4;y++) {
         for(unsigned x=0;x<9;x++) {
             u8* p=data+fp[0].Offset+y*fp[0].Footprint.RowPitch+x*4;
@@ -166,15 +198,34 @@ int port_check_stencil_gpu(void)
         if(!((left==0 && right==0x66)||(left==0x66 && right==0)))ok=0;
     }
     D3D12_RANGE written={0,0};readback->lpVtbl->Unmap(readback,0,&written);
+    if(info)for(UINT64 i=0;i<info->lpVtbl->GetNumStoredMessages(info);i++) {
+        SIZE_T size=0;
+        hr=info->lpVtbl->GetMessage(info,i,NULL,&size);
+        if(FAILED(hr)) {ok=0;goto cleanup;}
+        D3D12_MESSAGE* message=(D3D12_MESSAGE*)malloc(size);
+        if(!message)abort();
+        hr=info->lpVtbl->GetMessage(info,i,message,&size);
+        if(SUCCEEDED(hr) && message->Severity<=D3D12_MESSAGE_SEVERITY_ERROR) {
+            validation_errors++;
+            fprintf(stderr,"[stencil-test] D3D12 id=%u %s\n",message->ID,message->pDescription);
+        }
+        free(message);
+        if(FAILED(hr)) {ok=0;goto cleanup;}
+    }
+    ok=ok && !validation_errors;
 cleanup:
-    fprintf(stderr,"[compat-check] stencil GPU device=%s snapshot=%d asymmetric-rejected=%d pixels=%u/36 %s hr=%08lX\n",
-        software?"WARP":"hardware",snapshot,asymmetric,pixels,ok?"PASS":"FAIL",(unsigned long)hr);
+    fprintf(stderr,"[compat-check] stencil GPU device=%s snapshot=%d asymmetric-rejected=%d pixels=%u/36 debug=%d errors=%u %s hr=%08lX\n",
+        software?"WARP":"hardware",snapshot,asymmetric,pixels,SUCCEEDED(debug_hr),validation_errors,
+        ok?"PASS":"FAIL",(unsigned long)hr);
+    port_zpass_release();
+    memset(&s_d3d,0,sizeof(s_d3d));
     if(event)CloseHandle(event);
     for(unsigned i=0;i<pso_count;i++)if(psos[i])psos[i]->lpVtbl->Release(psos[i]);
 #define STENCIL_RELEASE(p) if(p)p->lpVtbl->Release(p)
     STENCIL_RELEASE(depth);STENCIL_RELEASE(dsv_heap);STENCIL_RELEASE(readback);STENCIL_RELEASE(target);STENCIL_RELEASE(heap);
     STENCIL_RELEASE(root);STENCIL_RELEASE(sig);STENCIL_RELEASE(vs);STENCIL_RELEASE(ps);STENCIL_RELEASE(error);
-    STENCIL_RELEASE(list);STENCIL_RELEASE(allocator);STENCIL_RELEASE(queue);STENCIL_RELEASE(fence);STENCIL_RELEASE(device);STENCIL_RELEASE(warp);STENCIL_RELEASE(factory);
+    STENCIL_RELEASE(list);STENCIL_RELEASE(allocator);STENCIL_RELEASE(queue);STENCIL_RELEASE(fence);
+    STENCIL_RELEASE(info);STENCIL_RELEASE(device);STENCIL_RELEASE(warp);STENCIL_RELEASE(factory);
 #undef STENCIL_RELEASE
 #undef STENCIL_TRY
     return ok?0:1;
