@@ -150,6 +150,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/checks/color_surfaces_gpu.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_rt_layouts.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/renderer_rt_layouts.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/renderer_depth_alias.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/renderer_zpass.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/gcm_zpass.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/checks/rt_layouts_gpu.inc"

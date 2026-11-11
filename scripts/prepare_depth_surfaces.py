@@ -78,6 +78,10 @@ static void port_snapshot_depth(D3D12DrawRecord* dr,const rsx_state* st)
 typedef struct {
     PortDepthKey key;
     ID3D12Resource* resource;
+    ID3D12Resource* packed_view;
+    ID3D12Resource* packed_planes;
+    ID3D12Resource* packed_rgba;
+    int written,linear_writer,packed_current;
     ID3D12DescriptorHeap* heap;
     D3D12_CPU_DESCRIPTOR_HANDLE view;
 } PortDepthSurface;
@@ -138,6 +142,9 @@ static void port_release_depth_surfaces(void)
     for(unsigned i=0;i<port_depth_count;i++) {
         PortDepthSurface* s=&port_depth_surfaces[i];
         if(s->resource) s->resource->lpVtbl->Release(s->resource);
+        if(s->packed_view) s->packed_view->lpVtbl->Release(s->packed_view);
+        if(s->packed_planes) s->packed_planes->lpVtbl->Release(s->packed_planes);
+        if(s->packed_rgba) s->packed_rgba->lpVtbl->Release(s->packed_rgba);
         if(s->heap) s->heap->lpVtbl->Release(s->heap);
     }
     free(port_depth_surfaces);port_depth_surfaces=NULL;port_depth_count=port_depth_capacity=0;

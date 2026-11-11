@@ -94,6 +94,12 @@ static void port_rt_copy_pipeline(void)
         "uint morton(uint x,uint y){uint r=0,b=0;for(uint i=0;i<max(logW,logH);i++){"
         "if(i<logW){r|=((x>>i)&1)<<b;b++;}if(i<logH){r|=((y>>i)&1)<<b;b++;}}return r;}"
         "[numthreads(64,1,1)] void main(uint3 id:SV_DispatchThreadID){if(id.x>=words||id.y>=height)return;"
+        /* Mode 3 takes the two D3D12 planes and emits an A8R8G8B8 view of
+         * (depth24 << 8) | stencil. Its wordsPerPixel slot carries output pitch. */
+        "if(encoding==3){uint z=src.Load(id.y*nativePitch+id.x*4)&0x00ffffff;"
+        "uint at=guestBase+id.y*guestPitch+id.x;"
+        "uint s=(src.Load(at&~3u)>>((at&3u)*8))&255;"
+        "dst.Store(id.y*wordsPerPixel+id.x*4,((z>>8)&255)|((z&255)<<8)|(s<<16)|((z&0xff0000)<<8));return;}"
         "uint g=guestBase+(swizzled?(morton(id.x/wordsPerPixel,id.y)*wordsPerPixel+id.x%wordsPerPixel)*4:id.y*guestPitch+id.x*4);"
         "uint n=id.y*nativePitch+id.x*4;uint v=src.Load(toGuest?n:g);"
         "if(encoding==0)v=toGuest?((v<<8)|(v>>24)):((v>>8)|(v<<24));"
@@ -105,6 +111,17 @@ static void port_rt_copy_pipeline(void)
     pd.CS.pShaderBytecode=shader->lpVtbl->GetBufferPointer(shader);pd.CS.BytecodeLength=shader->lpVtbl->GetBufferSize(shader);
     hr=s_d3d.device->lpVtbl->CreateComputePipelineState(s_d3d.device,&pd,&IID_ID3D12PipelineState,(void**)&port_rt_copy_pso);
     shader->lpVtbl->Release(shader);port_rt_require(hr);
+}
+static void port_rt_dispatch_raw_copy(ID3D12Resource* source,ID3D12Resource* dest,const u32 c[11])
+{
+    port_rt_copy_pipeline();
+    ID3D12GraphicsCommandList* list=s_d3d.cmd_list;
+    list->lpVtbl->SetComputeRootSignature(list,port_rt_copy_root);
+    list->lpVtbl->SetPipelineState(list,port_rt_copy_pso);
+    list->lpVtbl->SetComputeRootShaderResourceView(list,0,source->lpVtbl->GetGPUVirtualAddress(source));
+    list->lpVtbl->SetComputeRootUnorderedAccessView(list,1,dest->lpVtbl->GetGPUVirtualAddress(dest));
+    list->lpVtbl->SetComputeRoot32BitConstants(list,2,11,c,0);
+    list->lpVtbl->Dispatch(list,(c[0]+63)/64,c[1],1);
 }
 static void port_rt_stage(OffRT* r,u64 bytes)
 {
@@ -124,18 +141,12 @@ static void port_rt_transform(OffRT* r,const rsx_tex_level* level,const D3D12_PL
     u32 c[11]={level->w*bpp/4,level->h,level->tl.row_bytes,fp->Footprint.RowPitch,
         r->dxgi==DXGI_FORMAT_R8G8B8A8_UNORM?0:r->dxgi==DXGI_FORMAT_R16G16B16A16_FLOAT?1:2,
         (u32)to_guest,bpp/4,(u32)swizzled,port_rt_log2(level->w),port_rt_log2(level->h),level->offset};
-    port_rt_copy_pipeline();
     ID3D12Resource* source=to_guest?r->transfer:r->backing;ID3D12Resource* dest=to_guest?r->backing:r->transfer;
     D3D12_RESOURCE_STATES* source_state=to_guest?&r->transfer_state:&r->backing_state;
     D3D12_RESOURCE_STATES* dest_state=to_guest?&r->backing_state:&r->transfer_state;
     port_rt_buffer_state(source,source_state,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     port_rt_buffer_state(dest,dest_state,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    ID3D12GraphicsCommandList* list=s_d3d.cmd_list;list->lpVtbl->SetComputeRootSignature(list,port_rt_copy_root);
-    list->lpVtbl->SetPipelineState(list,port_rt_copy_pso);
-    list->lpVtbl->SetComputeRootShaderResourceView(list,0,source->lpVtbl->GetGPUVirtualAddress(source));
-    list->lpVtbl->SetComputeRootUnorderedAccessView(list,1,dest->lpVtbl->GetGPUVirtualAddress(dest));
-    list->lpVtbl->SetComputeRoot32BitConstants(list,2,11,c,0);
-    list->lpVtbl->Dispatch(list,(c[0]+63)/64,level->h,1);
+    port_rt_dispatch_raw_copy(source,dest,c);
 }
 static u32 port_rt_chain(OffRT* r,rsx_tex_level levels[RSX_MAX_TEXTURE_LEVELS],u32* span)
 {

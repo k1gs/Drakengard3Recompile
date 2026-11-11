@@ -743,7 +743,7 @@ int port_check_renderer_options(void)
     text=prepare_rt_layouts(text)
     replace('    int   is_clear;', '    u64   zpass_epoch;\n    int   is_clear;')
     zpass=(Path(__file__).resolve().parents[1]/'port/renderer_zpass.inc').read_text(encoding='utf-8')
-    replace('static void port_rt_storage_release(void)', zpass+'\nstatic void port_rt_storage_release(void)')
+    replace('static void port_rt_storage_release(void)\n{', zpass+'\nstatic void port_rt_storage_release(void)\n{')
     for record, count in (('dr->', 3), ('s_d3d.draws[s_d3d.draw_count].', 2)):
         pattern=rf'(?m)^([ ]*)({re.escape(record)}is_clear[ ]*= 0;)'
         text, actual=re.subn(pattern, lambda match:
@@ -763,6 +763,28 @@ int port_check_renderer_options(void)
             '    port_zpass_resolve();\n    s_d3d.cmd_list->lpVtbl->Close(s_d3d.cmd_list);\n    ID3D12CommandList* cmd_lists[]')
     replace('    port_rt_storage_release();\n    /* Release D3D12 resources */',
             '    port_zpass_release();\n    port_rt_storage_release();\n    /* Release D3D12 resources */')
+    depth_alias=(Path(__file__).resolve().parents[1]/'port/renderer_depth_alias.inc').read_text(encoding='utf-8')
+    replace('static void port_resolve_texture_unit(D3D12DrawRecord* dr,u32 _d,int _u)',
+            depth_alias+'\nstatic void port_resolve_texture_unit(D3D12DrawRecord* dr,u32 _d,int _u)')
+    replace('            dr->tex_rt[_u] = -1;dr->tex_resource[_u]=NULL;',
+            '''            dr->tex_rt[_u] = -1;dr->tex_resource[_u]=NULL;
+            if(dr->tex[_u].set) {
+                ID3D12Resource* depth_alias=port_depth_texture_alias(dr,(unsigned)_u);
+                if(depth_alias) {
+                    dr->tex_resource[_u]=depth_alias;
+                    srv_write(wslot,depth_alias,DXGI_FORMAT_R8G8B8A8_UNORM,
+                        rsx_remap_to_d3d(dr->tex[_u].ctrl1,0x85));
+                    return;
+                }
+            }''')
+    replace('                    if(dsv_handle.ptr) port_clear_depth_view(dr,dsv_handle);',
+            '''                    if(dsv_handle.ptr) {
+                        port_clear_depth_view(dr,dsv_handle);
+                        port_depth_note_write(dr);
+                    }''')
+    replace('                port_zpass_draw(dr,dr->vb_byte_offset / 256);',
+            '''                port_zpass_draw(dr,dr->vb_byte_offset / 256);
+                port_depth_note_write(dr);''')
     # Warning budgets must never hide a later D3D12 validation error.
     replace('for (UINT64 mi = 0; mi < n && _printed < 80; mi++) {',
             'for (UINT64 mi = 0; mi < n; mi++) {')
