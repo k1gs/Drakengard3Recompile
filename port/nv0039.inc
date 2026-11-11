@@ -1,5 +1,5 @@
-/* NV0039 byte-column copies into ordinary guest memory. Color surfaces are
- * read from GPU backing. Depth, display and report DMA stay unsupported. */
+/* NV0039 byte-column copies into ordinary guest memory. Color surfaces and
+ * local reports use their own storage. Depth and display stay unsupported. */
 /* Register/byte-stride reference (independent implementation below):
  * https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/RSX/NV47/HW/nv0039.cpp */
 extern int port_renderer_guest_range_owned(u32,u32);
@@ -10,13 +10,16 @@ typedef struct {
 } PortNv0039;
 static PortNv0039 port_nv0039;
 enum { PORT_NV_COPY=1,PORT_NV_NOP=0,PORT_NV_FORMAT=-1,PORT_NV_MAP=-2,
-       PORT_NV_GPU=-3,PORT_NV_OVERLAP=-4,PORT_NV_CONTEXT=-5,PORT_NV_NOTIFY=-6 };
+       PORT_NV_GPU=-3,PORT_NV_OVERLAP=-4,PORT_NV_CONTEXT=-5,PORT_NV_NOTIFY=-6,
+       PORT_NV_REPORT=-7 };
 static int port_nv0039_last;
-static u64 port_nv0039_copies,port_nv0039_rejected,port_nv0039_noops,port_nv0039_results[8];
+static u64 port_nv0039_copies,port_nv0039_rejected,port_nv0039_noops,port_nv0039_results[9];
+static u64 port_nv0039_report_copies;
 static void port_nv0039_reset(void)
 {
     memset(&port_nv0039,0,sizeof(port_nv0039));port_nv0039_last=0;
     port_nv0039_copies=port_nv0039_rejected=port_nv0039_noops=0;
+    port_nv0039_report_copies=0;
     memset(port_nv0039_results,0,sizeof(port_nv0039_results));
 }
 int port_gcm_display_range_owned(u32 ea,u32 bytes)
@@ -95,13 +98,27 @@ static int port_nv0039_span(u32 dma,u32 offset,u64 bytes,int write,u64* low,u64*
     }
     return PORT_NV_COPY;
 }
+static int port_nv0039_report_span(u32 offset,u64 bytes)
+{
+    const u64 end=(u64)offset+bytes;
+    if(end>sizeof(port_local_report_bytes))return PORT_NV_MAP;
+    for(u32 index=offset/PORT_REPORT_SIZE;index<=(end-1)/PORT_REPORT_SIZE;index++) {
+        const u16 state=port_local_report_state[index];
+        if(state==PORT_REPORT_PUBLISHED)continue;
+        static unsigned shown;
+        if(shown++<16)fprintf(stderr,"[nv0039-report] unavailable slot=%u state=%03X\n",index,state);
+        return PORT_NV_REPORT;
+    }
+    return PORT_NV_COPY;
+}
 static int port_nv0039_copy(const PortNv0039* p,u32 notify)
 {
     if(!p->width || !p->lines)return PORT_NV_NOP;
     u32 in=p->format&255u,out=(p->format>>8)&255u;
     if((p->format&0xFFFF0000u) || !in || in>4 || !out || out>4)return PORT_NV_FORMAT;
     if(notify)return PORT_NV_NOTIFY;
-    if((p->in_dma!=0xFEED0000u && p->in_dma!=0xFEED0001u) ||
+    const int report_source=p->in_dma==PORT_LOCAL_REPORT_DMA;
+    if((!report_source && p->in_dma!=0xFEED0000u && p->in_dma!=0xFEED0001u) ||
        (p->out_dma!=0xFEED0000u && p->out_dma!=0xFEED0001u))return PORT_NV_CONTEXT;
     /* A queued draw may be the source producer or a previous destination
      * reader. Execute it through the normal FIFO/renderer boundary first. */
@@ -113,14 +130,15 @@ static int port_nv0039_copy(const PortNv0039* p,u32 notify)
         u32 src,dst;
         if(!port_nv0039_row(p->in_off,p->in_pitch,row,in_bytes,&src) ||
            !port_nv0039_row(p->out_off,p->out_pitch,row,out_bytes,&dst))return PORT_NV_MAP;
-        int result=port_nv0039_span(p->in_dma,src,in_bytes,0,&src_low,&src_high,&gpu_source);
+        int result=report_source?port_nv0039_report_span(src,in_bytes):
+            port_nv0039_span(p->in_dma,src,in_bytes,0,&src_low,&src_high,&gpu_source);
         if(result!=PORT_NV_COPY)return result;
         result=port_nv0039_span(p->out_dma,dst,out_bytes,1,&dst_low,&dst_high,&gpu_source);
         if(result!=PORT_NV_COPY)return result;
     }
     /* Deliberately disjoint-only. Bounding gaps in discontiguous mappings may
      * reject an otherwise safe case; no guessed overlapping-DMA semantics. */
-    if(src_low<dst_high && dst_low<src_high)return PORT_NV_OVERLAP;
+    if(!report_source && src_low<dst_high && dst_low<src_high)return PORT_NV_OVERLAP;
     u8* color=NULL;
     if(gpu_source) {
         u64 span=src_high-src_low;
@@ -137,8 +155,13 @@ static int port_nv0039_copy(const PortNv0039* p,u32 notify)
             u32 columns=p->width-column;
             u32 si=(0xFFFFFu-(so&0xFFFFFu))/in+1,di=(0xFFFFFu-(doff&0xFFFFFu))/out+1;
             if(columns>si)columns=si;if(columns>di)columns=di;
-            u32 se=port_nv0039_ea(p->in_dma,so),de=port_nv0039_ea(p->out_dma,doff);
-            const u8* source=color?color+(se-src_low):vm_base+se;
+            u32 de=port_nv0039_ea(p->out_dma,doff);
+            const u8* source;
+            if(report_source)source=port_local_report_bytes+so;
+            else {
+                u32 se=port_nv0039_ea(p->in_dma,so);
+                source=color?color+(se-src_low):vm_base+se;
+            }
             if(in==1 && out==1)vm_memcpy_to(de,source,columns);
             else for(u32 x=0;x<columns;x++)vm_write8(de+x*out,source[x*in]);
             port_gcm_notify_write(de,(columns-1)*out+1);column+=columns;
@@ -165,7 +188,9 @@ static int port_nv0039_method(u32 method,u32 value)
         if(port_nv0039_last==PORT_NV_COPY)port_nv0039_copies++;
         else if(port_nv0039_last==PORT_NV_NOP)port_nv0039_noops++;
         else port_nv0039_rejected++;
-        u64 count=++port_nv0039_results[port_nv0039_last+6];
+        u64 count=++port_nv0039_results[port_nv0039_last+7];
+        if(port_nv0039_last==PORT_NV_COPY && p.in_dma==PORT_LOCAL_REPORT_DMA)
+            count=++port_nv0039_report_copies;
         const char* trace=getenv("PORT_NV0039_TRACE");int cap=trace?atoi(trace):8;if(cap<8)cap=8;
         if(count<=(u64)cap)fprintf(stderr,
             "[nv0039] result=%d in=%08X:%08X out=%08X:%08X width=%u lines=%u pitch=%08X/%08X format=%08X notify=%08X count=%llu\n",

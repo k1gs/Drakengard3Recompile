@@ -1,4 +1,4 @@
-"""Checked NV0039 memory-transfer preparation; report data stays unsupported."""
+"""Checked NV0039 memory-transfer preparation."""
 from pathlib import Path
 
 

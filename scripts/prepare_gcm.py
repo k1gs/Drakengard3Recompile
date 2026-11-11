@@ -225,7 +225,7 @@ void port_gcm_contract_default_context(u32 context) {
     if '0xFFFFu : 0u' not in text[report_start:report_end]:
         raise ValueError('Pinned synthetic report handler changed')
     text=text[:report_start]+'                    port_gcm_report_method(m, vm_read32(dea));'+text[report_end:]
-    report_anchor='static PortNv0039 port_nv0039;'
+    report_anchor='/* NV0039 byte-column copies into ordinary guest memory.'
     report_reset='    port_nv0039_reset();\n'
     if text.count(report_anchor)!=1 or text.count(report_reset)!=2:
         raise ValueError('Pinned GCM report placement changed')

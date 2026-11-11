@@ -1,3 +1,53 @@
+static int port_check_report_dma(void)
+{
+    extern u8* vm_base;
+    static const u8 record[16]={1,2,3,4,5,6,7,8,0x81,0x02,0xFE,0x39,0,0,0,0};
+    u8 expected[80];
+    for(unsigned i=0;i<5;i++) {
+        port_gcm_report_publish(i,0x0102030405060708ull+i,0x8102FE39u-i);
+        memcpy(expected+i*16,record,16);
+        expected[i*16+7]+=i;
+        expected[i*16+11]-=i;
+    }
+    /* Match the 80-byte title transfer, crossing two disjoint IO mappings. */
+    gcm_2d_method(1,0x184,PORT_LOCAL_REPORT_DMA);gcm_2d_method(1,0x188,0xFEED0001u);
+    gcm_2d_method(1,0x30C,0);gcm_2d_method(1,0x310,0xFFFFCu);
+    gcm_2d_method(1,0x314,0);gcm_2d_method(1,0x318,0);
+    gcm_2d_method(1,0x31C,80);gcm_2d_method(1,0x320,1);gcm_2d_method(1,0x324,0x101);
+    gcm_2d_method(1,0x328,0);
+    int full=port_nv0039_last==PORT_NV_COPY && !memcmp(vm_base+0x1FFFFC,expected,4) &&
+        !memcmp(vm_base+0x300000,expected+4,76);
+
+    const u32 scratch=s_config.localAddress+0x900;
+    u8 sparse[16];memset(sparse,0xCD,sizeof(sparse));memset(vm_base+scratch,0xCD,sizeof(sparse));
+    PortNv0039 strided={PORT_LOCAL_REPORT_DMA,0xFEED0000u,20,0x900,(u32)-16,8,4,2,0x202};
+    for(unsigned i=0;i<4;i++) {
+        sparse[i*2]=expected[20+i*2];
+        sparse[8+i*2]=expected[4+i*2];
+    }
+    int steps=port_nv0039_copy(&strided,0)==PORT_NV_COPY &&
+        !memcmp(vm_base+scratch,sparse,sizeof(sparse));
+    /* No earlier row may be committed if a later report slot is unavailable. */
+    PortNv0039 partial={PORT_LOCAL_REPORT_DMA,0xFEED0000u,64,0x900,16,8,8,2,0x101};
+    int unwritten=port_nv0039_copy(&partial,0)==PORT_NV_REPORT &&
+        !memcmp(vm_base+scratch,sparse,sizeof(sparse));
+    port_gcm_report_method(0x1800,0x02000040);
+    partial.lines=1;
+    int unsupported=port_nv0039_copy(&partial,0)==PORT_NV_REPORT &&
+        !memcmp(vm_base+scratch,sparse,sizeof(sparse));
+    port_gcm_report_publish(2047,0x0102030405060708ull,0x8102FE39u);
+    partial.in_off=0x7FF0;partial.width=16;
+    int last=port_nv0039_copy(&partial,0)==PORT_NV_COPY && !memcmp(vm_base+scratch,record,16);
+    partial.width=17;
+    int bounds=port_nv0039_copy(&partial,0)==PORT_NV_MAP && !memcmp(vm_base+scratch,record,16);
+    port_gcm_report_reset();
+    partial.width=16;
+    int reset=port_nv0039_copy(&partial,0)==PORT_NV_REPORT && !memcmp(vm_base+scratch,record,16);
+    fprintf(stderr,"[compat-check] report DMA bytes=%d strided=%d unwritten=%d unsupported=%d last=%d bounds=%d reset=%d\n",
+        full,steps,unwritten,unsupported,last,bounds,reset);
+    return full && steps && unwritten && unsupported && last && bounds && reset;
+}
+
 /* Exercise the actual 2D method dispatcher, with independent guest bytes. */
 int port_check_nv0039(void)
 {
@@ -48,6 +98,7 @@ int port_check_nv0039(void)
     gcm_2d_method(1,0x31C,8);gcm_2d_method(1,0x320,1);gcm_2d_method(1,0x324,0x101);
     gcm_2d_method(1,0x328,0);
     int pages=port_nv0039_last==PORT_NV_COPY && !memcmp(vm_base+0x3FFFFC,expected,4) && !memcmp(vm_base+0x500000,expected+4,4);
+    int reports=port_check_report_dma();
     /* Reject every unsupported operation before changing any destination. */
     PortNv0039 valid={0xFEED0000u,0xFEED0000u,0x100,0x300,16,16,8,2,0x101};
     u8 local_before[0x10000];
@@ -122,7 +173,28 @@ int port_check_nv0039(void)
     fprintf(stderr,"[compat-check] NV0039 matrix=%u/128 discontiguous-pages=%d rejected=%u/9 disjoint=%d display-guard=%d reset=%d\n",matrix,pages,rejected,disjoint,display_guard,reset);
     fprintf(stderr,"[compat-check] NV0039 lazy-destination=%d refuses-unbacked-source=%d MAIN-not-materialized=%d GPU-not-materialized=%d\n",
         lazy_dest,unbacked_source,main_not_materialized,gpu_not_materialized);
-    return deferred&&copied&&padding&&matrix==128&&pages&&rejected==9&&disjoint&&display_guard&&reset&&lazy_dest&&unbacked_source&&main_not_materialized&&gpu_not_materialized?0:1;
+    return deferred&&copied&&padding&&matrix==128&&pages&&reports&&rejected==9&&disjoint&&display_guard&&reset&&lazy_dest&&unbacked_source&&main_not_materialized&&gpu_not_materialized?0:1;
+}
+
+/* Called by the hardware ZPASS check after two actual GET_REPORT commands. */
+int port_check_gpu_report_dma(void)
+{
+    extern u8* vm_base;
+    const u32 ea=0x100100;
+    u16 saved_page=s_ea_address_table[0];
+    s_ea_address_table[0]=1;
+    memset(vm_base+ea,0xCD,32);
+    PortNv0039 transfer={PORT_LOCAL_REPORT_DMA,0xFEED0001u,0x100,0x100,0,0,32,1,0x101};
+    int ok=port_nv0039_copy(&transfer,0)==PORT_NV_COPY;
+    for(u32 i=0;i<2;i++) {
+        u32 at=ea+i*16;
+        u64 timestamp=((u64)vm_read32(at)<<32)|vm_read32(at+4);
+        ok=ok && timestamp && timestamp==s_report_data[16+i].timestamp &&
+            vm_read32(at+8)==(i?0:4) && vm_read32(at+12)==0;
+    }
+    s_ea_address_table[0]=saved_page;
+    fprintf(stderr,"[compat-check] GPU ZPASS to NV0039 MAIN bytes=%d\n",ok);
+    return ok;
 }
 /* The producer is a real GPU write. Guest RAM still contains poison bytes. */
 int port_check_nv0039_gpu_source(u32 gpu_ea,u32 outside_ea,u32 scratch,const u8* expected)

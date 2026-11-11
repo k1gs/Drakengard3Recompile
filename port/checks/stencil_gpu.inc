@@ -175,11 +175,13 @@ int port_check_stencil_gpu(void)
     port_gcm_report_method(0x1800,0x01000100);
     u32 main_ignored=cellGcmGetReport(1,16);
     port_gcm_report_method(0x1A8,0x66626660u);
+    extern int port_check_gpu_report_dma(void);
+    int report_dma=port_check_gpu_report_dma();
     fprintf(stderr,"[compat-check] ZPASS queries=%u samples=%u cleared=%u retained=%u main-ignored=%u\n",
         query_count,samples,cleared,retained,main_ignored);
     unsigned char* data=NULL;D3D12_RANGE range={0,(SIZE_T)total};STENCIL_TRY(readback->lpVtbl->Map(readback,0,&range,(void**)&data));
     static const u8 expected[7][4]={{255,0,0,0xA5},{0,255,0,0xAB},{0,0,255,0xA1},{255,255,0,0},{255,0,255,0x5F},{0,255,255,0},{255,128,0,0xA0}};
-    ok=query_count==3 && samples==4 && cleared==0 && retained==4 && main_ignored==4;
+    ok=query_count==3 && samples==4 && cleared==0 && retained==4 && main_ignored==4 && report_dma;
     for(unsigned y=0;y<4;y++) {
         for(unsigned x=0;x<9;x++) {
             u8* p=data+fp[0].Offset+y*fp[0].Footprint.RowPitch+x*4;
