@@ -233,14 +233,38 @@ void port_gcm_contract_default_context(u32 context) {
     if text.count(wrap_anchor)!=1:
         raise ValueError('Pinned FIFO cursor changed')
     text=text.replace(wrap_anchor,'''/* Protected by s_gcm_fifo_lock, like the FIFO cursor. */
-static struct {u32 context,current,from,to;int jump_published,acknowledged;} port_fifo_wrap;
+static struct {
+    u32 context,current,from,to,passes,last_start;
+    const char* last_stop;
+    int jump_published,acknowledged;
+} port_fifo_wrap;
 static void port_fifo_wrap_reset(void) { memset(&port_fifo_wrap,0,sizeof(port_fifo_wrap)); }
 
 '''+wrap_anchor)
     text=text.replace(jump,'''              if(port_fifo_wrap.jump_published && s_fifo_getoff==port_fifo_wrap.from &&
                  tgt==port_fifo_wrap.to && put==tgt && tgt!=s_fifo_getoff)
                   port_fifo_wrap.acknowledged=1;
-'''+jump)
+'''+jump+'\n                  why = "jump-park";')
+    publish='    g_gcm_fifo_drained_ea = gcm_io2ea(s_fifo_getoff);'
+    if text.count(publish)!=1:
+        raise ValueError('Pinned FIFO progress publication changed')
+    text=text.replace(publish,'''    if(port_fifo_wrap.context) {
+        port_fifo_wrap.passes++;
+        port_fifo_wrap.last_start=start_off;
+        port_fifo_wrap.last_stop=budget<=0 && s_fifo_getoff!=put ? "budget" : why;
+        /* Keep advancing a pending wrap even if its caller timed out.
+         * PUT and the producer cursor must still belong to this request. */
+        if(!port_fifo_wrap.jump_published && s_fifo_getoff==port_fifo_wrap.from &&
+           put==port_fifo_wrap.from && vm_read32(GCM_CONTROL_GUEST_ADDR)==put &&
+           vm_read32(port_fifo_wrap.context+8)==port_fifo_wrap.current &&
+           gcm_io2ea(put)==port_fifo_wrap.current &&
+           vm_read32(port_fifo_wrap.current)==(0x20000000u|port_fifo_wrap.to)) {
+            port_fifo_wrap.jump_published=1;
+            put=port_fifo_wrap.to;
+            vm_write32(GCM_CONTROL_GUEST_ADDR,put);
+        }
+    }
+'''+publish)
     report_start=text.index('                    /* NV4097_GET_REPORT:')
     report_end=text.index('\n                } else\n                    gcm_2d_method', report_start)
     if '0xFFFFu : 0u' not in text[report_start:report_end]:

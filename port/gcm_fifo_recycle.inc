@@ -37,11 +37,6 @@ static s32 port_fifo_recycle(u32 ctx_ea,u32 timeout_ms)
     const ULONGLONG started=GetTickCount64();
     for(;;) {
         AcquireSRWLockExclusive(&s_gcm_fifo_lock);
-        if(!port_fifo_wrap.jump_published && s_fifo_getoff==from &&
-            vm_read32(GCM_CONTROL_GUEST_ADDR)==from && vm_read32(ctx_ea+8)==current) {
-            port_fifo_wrap.jump_published=1;
-            vm_write32(GCM_CONTROL_GUEST_ADDR,to);
-        }
         if(port_fifo_wrap.acknowledged && s_fifo_getoff==to &&
             vm_read32(GCM_CONTROL_GUEST_ADDR)==to && vm_read32(ctx_ea+8)==current) {
             vm_write32(ctx_ea+8,begin);
@@ -49,13 +44,18 @@ static s32 port_fifo_recycle(u32 ctx_ea,u32 timeout_ms)
             ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
             return CELL_OK;
         }
-        const u32 get=s_fifo_getoff;
-        ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
         if(GetTickCount64()-started>=timeout_ms) {
-            fprintf(stderr,"[fifo-recycle] timeout ctx=%08X current=%08X jump=%08X->%08X get=%08X\n",
-                ctx_ea,current,from,to,get);
+            const u32 get=s_fifo_getoff,get_ea=gcm_io2ea(get),put=vm_read32(GCM_CONTROL_GUEST_ADDR);
+            const u32 word=get_ea?vm_read32(get_ea):0;
+            const u32 passes=port_fifo_wrap.passes,last_start=port_fifo_wrap.last_start;
+            const int published=port_fifo_wrap.jump_published,acknowledged=port_fifo_wrap.acknowledged;
+            const char* stop=port_fifo_wrap.last_stop;
+            ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
+            fprintf(stderr,"[fifo-recycle] timeout ctx=%08X current=%08X jump=%08X->%08X get=%08X put=%08X ea=%08X word=%08X passes=%u last_start=%08X stop=%s published=%d ack=%d\n",
+                ctx_ea,current,from,to,get,put,get_ea,word,passes,last_start,stop?stop:"none",published,acknowledged);
             return CELL_GCM_ERROR_FAILURE;
         }
+        ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
         Sleep(1);
     }
 }
@@ -79,13 +79,19 @@ int port_check_fifo_callback_recycle(u32 ea)
     cellGcm_rsx_process_fifo();
     int after_flip=port_fifo_recycle(ctx,0)==CELL_GCM_ERROR_FAILURE &&
         vm_read32(ctx+8)==tail && !vm_read32(label);
+    /* A changed write head is not owned by this wrap request. */
+    vm_write32(ctx+8,tail+4);
     cellGcm_rsx_process_fifo();
-    int drained=port_fifo_recycle(ctx,0)==CELL_GCM_ERROR_FAILURE &&
+    int ownership_held=!port_fifo_wrap.jump_published && vm_read32(GCM_CONTROL_GUEST_ADDR)==24;
+    vm_write32(ctx+8,tail);
+    cellGcm_rsx_process_fifo();
+    int drained=port_fifo_wrap.jump_published && !port_fifo_wrap.acknowledged &&
         vm_read32(ctx+8)==tail && vm_read32(label)==0x466;
     cellGcm_rsx_process_fifo();
-    int recycled=port_fifo_recycle(ctx,0)==CELL_OK && vm_read32(ctx+8)==ea;
-    int ok=timeout && after_flip && drained && recycled;
-    fprintf(stderr,"[compat-check] FIFO callback timeout=%d flip-tail-held=%d acknowledged=%d %s\n",
-        timeout,after_flip,recycled,ok?"PASS":"FAIL");
+    int recycled=port_fifo_wrap.acknowledged && vm_read32(ctx+8)==tail &&
+        port_fifo_recycle(ctx,0)==CELL_OK && vm_read32(ctx+8)==ea;
+    int ok=timeout && after_flip && ownership_held && drained && recycled;
+    fprintf(stderr,"[compat-check] FIFO callback timeout=%d flip-tail-held=%d ownership-held=%d autonomous-publish=%d acknowledged=%d %s\n",
+        timeout,after_flip,ownership_held,drained,recycled,ok?"PASS":"FAIL");
     return ok;
 }
