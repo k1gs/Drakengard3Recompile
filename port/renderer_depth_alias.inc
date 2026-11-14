@@ -77,12 +77,14 @@ static void port_depth_pack_view(PortDepthSurface* s)
     s->packed_current=1;
 }
 
-static ID3D12Resource* port_depth_texture_alias(const D3D12DrawRecord* dr,unsigned unit)
+static ID3D12Resource* port_depth_texture_alias(const D3D12DrawRecord* dr,u32 draw,unsigned unit)
 {
     PortDepthSurface* source=NULL;
     const u32 ea=dr->tex[unit].off,w=dr->tex[unit].w,h=dr->tex[unit].h;
     const u32 pitch=dr->tex[unit].source_pitch?dr->tex[unit].source_pitch:w*4u;
-    if((dr->tex[unit].fmt&0xBFu)!=0xA5 || dr->tex[unit].cube || dr->tex[unit].mips!=1)return NULL;
+    if((dr->tex[unit].fmt&0xBFu)!=0xA5)return NULL;
+    const char* result="bound";
+    int supported=1;
     for(unsigned i=0;i<port_depth_count;i++) {
         PortDepthSurface* s=&port_depth_surfaces[i];
         const PortDepthKey* k=&s->key;
@@ -90,12 +92,31 @@ static ID3D12Resource* port_depth_texture_alias(const D3D12DrawRecord* dr,unsign
         if(k->pitch>row)row=k->pitch;
         if(!s->written || !port_rt_overlap(ea,(u64)pitch*h,k->address,row*k->height))continue;
         if(source || k->address!=ea || k->width!=w || k->height!=h || k->format!=2 ||
-            !s->linear_writer || pitch!=row || pitch!=w*4u)return NULL;
+            !s->linear_writer || pitch!=row || pitch!=w*4u || dr->tex[unit].cube || dr->tex[unit].mips!=1) {
+            source=s;
+            result="depth-layout";
+            supported=0;
+            break;
+        }
         source=s;
     }
     if(!source)return NULL;
-    for(unsigned i=0;i<s_d3d.off_rt_count;i++)if(port_rt_overlap(ea,(u64)pitch*h,
-        s_d3d.off_rt[i].address,s_d3d.off_rt[i].backing_size))return NULL;
-    if(!source->packed_current)port_depth_pack_view(source);
-    return source->packed_view;
+    for(unsigned i=0;supported && i<s_d3d.off_rt_count;i++)if(port_rt_overlap(ea,(u64)pitch*h,
+        s_d3d.off_rt[i].address,s_d3d.off_rt[i].backing_size)) {
+        result="color-overlap";
+        supported=0;
+    }
+    const int refreshed=supported && !source->packed_current;
+    if(refreshed)port_depth_pack_view(source);
+    static int trace=-1;
+    if(trace<0)trace=getenv("PORT_RENDER_TRACE")!=NULL;
+    if(trace) {
+        static unsigned shown[2];
+        if(shown[supported]++<24)fprintf(stderr,
+            "[depth-alias] %s refreshed=%d frame=%llu draw=%u vs=%08X fp=%08X rt=%08X unit=%u ea=%08X %ux%u pitch=%u mips=%u producer=%08X %ux%u pitch=%u fmt=%u linear=%d\n",
+            result,refreshed,(unsigned long long)s_d3d.frame_count,draw,dr->vs_hash,dr->fp_addr,
+            dr->rt_off,unit,ea,w,h,pitch,dr->tex[unit].mips,source->key.address,source->key.width,
+            source->key.height,source->key.pitch,source->key.format,source->linear_writer);
+    }
+    return supported?source->packed_view:NULL;
 }

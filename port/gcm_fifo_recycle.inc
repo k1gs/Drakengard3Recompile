@@ -1,0 +1,91 @@
+/* The producer can reuse the head only after the FIFO owner has taken its
+ * exact wrap jump. A failed callback retains the outstanding wrap for retry. */
+static s32 port_fifo_recycle(u32 ctx_ea,u32 timeout_ms)
+{
+    if(!ctx_ea)return CELL_GCM_ERROR_INVALID_VALUE;
+    AcquireSRWLockExclusive(&s_gcm_fifo_lock);
+    const u32 begin=vm_read32(ctx_ea),end=vm_read32(ctx_ea+4),current=vm_read32(ctx_ea+8);
+    const u32 to=gcm_ea2io(begin),from=gcm_ea2io(current);
+    if(!begin || end<=begin || current<begin || current>end ||
+        ((begin|current)&3u) || to>0x1FFFFFFCu || from==0xFFFFFFFFu ||
+        gcm_io2ea(from)!=current || gcm_io2ea(to)!=begin) {
+        ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
+        return CELL_GCM_ERROR_INVALID_VALUE;
+    }
+    if(port_fifo_wrap.context) {
+        if(port_fifo_wrap.context!=ctx_ea || port_fifo_wrap.current!=current ||
+           port_fifo_wrap.from!=from || port_fifo_wrap.to!=to) {
+            ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
+            return CELL_GCM_ERROR_FAILURE;
+        }
+    } else if(current!=begin) {
+        port_fifo_wrap.context=ctx_ea;
+        port_fifo_wrap.current=current;
+        port_fifo_wrap.from=from;
+        port_fifo_wrap.to=to;
+        vm_write32(current,0x20000000u|to);
+        atomic_thread_fence(memory_order_release);
+        /* Drain to the tail before moving PUT back to the head. Otherwise
+         * GET==PUT at the head can hide a whole unpublished tail. */
+        vm_write32(GCM_CONTROL_GUEST_ADDR,from);
+    } else {
+        ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
+        return CELL_OK;
+    }
+    ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
+
+    const ULONGLONG started=GetTickCount64();
+    for(;;) {
+        AcquireSRWLockExclusive(&s_gcm_fifo_lock);
+        if(!port_fifo_wrap.jump_published && s_fifo_getoff==from &&
+            vm_read32(GCM_CONTROL_GUEST_ADDR)==from && vm_read32(ctx_ea+8)==current) {
+            port_fifo_wrap.jump_published=1;
+            vm_write32(GCM_CONTROL_GUEST_ADDR,to);
+        }
+        if(port_fifo_wrap.acknowledged && s_fifo_getoff==to &&
+            vm_read32(GCM_CONTROL_GUEST_ADDR)==to && vm_read32(ctx_ea+8)==current) {
+            vm_write32(ctx_ea+8,begin);
+            port_fifo_wrap_reset();
+            ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
+            return CELL_OK;
+        }
+        const u32 get=s_fifo_getoff;
+        ReleaseSRWLockExclusive(&s_gcm_fifo_lock);
+        if(GetTickCount64()-started>=timeout_ms) {
+            fprintf(stderr,"[fifo-recycle] timeout ctx=%08X current=%08X jump=%08X->%08X get=%08X\n",
+                ctx_ea,current,from,to,get);
+            return CELL_GCM_ERROR_FAILURE;
+        }
+        Sleep(1);
+    }
+}
+
+s32 cellGcm_fifo_recycle(u32 ctx_ea)
+{
+    return port_fifo_recycle(ctx_ea,2000);
+}
+
+int port_check_fifo_callback_recycle(u32 ea)
+{
+    const u32 ctx=ea+0x8000,tail=ea+24,label=ppu_hle_inject_base+0xFF0;
+    if(cellGcmSetDisplayBuffer(0,0,5120,1280,720))return 0;
+    vm_write32(ctx,ea);vm_write32(ctx+4,ea+0x1000);vm_write32(ctx+8,tail);
+    vm_write32(label,0);
+    vm_write32(ea,0x0004E924);vm_write32(ea+4,0);
+    vm_write32(ea+8,0x00041D6C);vm_write32(ea+12,0xFF0);
+    vm_write32(ea+16,0x00041D70);vm_write32(ea+20,0x00660400);
+    int timeout=port_fifo_recycle(ctx,0)==CELL_GCM_ERROR_FAILURE &&
+        vm_read32(ctx+8)==tail && !vm_read32(label);
+    cellGcm_rsx_process_fifo();
+    int after_flip=port_fifo_recycle(ctx,0)==CELL_GCM_ERROR_FAILURE &&
+        vm_read32(ctx+8)==tail && !vm_read32(label);
+    cellGcm_rsx_process_fifo();
+    int drained=port_fifo_recycle(ctx,0)==CELL_GCM_ERROR_FAILURE &&
+        vm_read32(ctx+8)==tail && vm_read32(label)==0x466;
+    cellGcm_rsx_process_fifo();
+    int recycled=port_fifo_recycle(ctx,0)==CELL_OK && vm_read32(ctx+8)==ea;
+    int ok=timeout && after_flip && drained && recycled;
+    fprintf(stderr,"[compat-check] FIFO callback timeout=%d flip-tail-held=%d acknowledged=%d %s\n",
+        timeout,after_flip,recycled,ok?"PASS":"FAIL");
+    return ok;
+}

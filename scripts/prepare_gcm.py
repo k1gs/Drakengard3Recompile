@@ -103,7 +103,7 @@ int port_check_vblank_counter(void)
          * the next frame queued on purpose. Never teleport GET past either:
          * all produced bytes must have been published AND actually consumed. */
         if (begin && end > begin && cur >= begin && cur + GCM_RECYCLE_SLACK >= end
-                && head_consumed && s_title_overran && s_fifo_getoff == put
+                && !port_fifo_wrap.context && head_consumed && s_title_overran && s_fifo_getoff == put
                 && gcm_ea2io(cur) == put) {''')
     for old,new in (
         ('else if (m == 0x6Cu) vm_write32(la, v);',
@@ -220,6 +220,27 @@ void port_gcm_contract_default_context(u32 context) {
 }
 '''
     text=prepare_nv0039(text)
+    recycle_start=text.index('void cellGcm_fifo_recycle(u32 ctx_ea)')
+    recycle_end=text.index('\n/* A host that brings its backend up',recycle_start)
+    if 'spins < 2000' not in text[recycle_start:recycle_end]:
+        raise ValueError('Pinned FIFO callback changed')
+    recycle=(Path(__file__).resolve().parents[1]/'port/gcm_fifo_recycle.inc').read_text(encoding='utf-8')
+    text=text[:recycle_start]+recycle+'\n'+text[recycle_end:]
+    jump='              if (tgt == s_fifo_getoff) {'
+    if text.count(jump)!=1:
+        raise ValueError('Pinned FIFO wrap acknowledgement changed')
+    wrap_anchor='static u32 s_fifo_getoff  = 0;'
+    if text.count(wrap_anchor)!=1:
+        raise ValueError('Pinned FIFO cursor changed')
+    text=text.replace(wrap_anchor,'''/* Protected by s_gcm_fifo_lock, like the FIFO cursor. */
+static struct {u32 context,current,from,to;int jump_published,acknowledged;} port_fifo_wrap;
+static void port_fifo_wrap_reset(void) { memset(&port_fifo_wrap,0,sizeof(port_fifo_wrap)); }
+
+'''+wrap_anchor)
+    text=text.replace(jump,'''              if(port_fifo_wrap.jump_published && s_fifo_getoff==port_fifo_wrap.from &&
+                 tgt==port_fifo_wrap.to && put==tgt && tgt!=s_fifo_getoff)
+                  port_fifo_wrap.acknowledged=1;
+'''+jump)
     report_start=text.index('                    /* NV4097_GET_REPORT:')
     report_end=text.index('\n                } else\n                    gcm_2d_method', report_start)
     if '0xFFFFu : 0u' not in text[report_start:report_end]:
@@ -232,8 +253,8 @@ void port_gcm_contract_default_context(u32 context) {
     report=(Path(__file__).resolve().parents[1]/'port/gcm_zpass.inc').read_text(encoding='utf-8')
     text=text.replace(report_anchor,report+'\n'+report_anchor)
     text=text.replace('    port_nv0039_reset();\n    memset(s_report_data,',
-                      '    port_gcm_report_reset();\n    port_nv0039_reset();\n    memset(s_report_data,')
-    text='static void port_gcm_report_reset(void);\n'+text
+                      '    port_fifo_wrap_reset();\n    port_gcm_report_reset();\n    port_nv0039_reset();\n    memset(s_report_data,')
+    text='static void port_fifo_wrap_reset(void);\nstatic void port_gcm_report_reset(void);\n'+text
     target=output/'cellGcmSys_compat.c'
     if not target.exists() or target.read_text(encoding='utf-8')!=text:
         target.write_text(text,encoding='utf-8')

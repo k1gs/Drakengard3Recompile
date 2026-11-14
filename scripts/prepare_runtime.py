@@ -100,6 +100,13 @@ def main():
     source = a.sdk / 'runtime/ppu/ppu_sysprx.cpp'
     raw = source.read_bytes()
     text = patch_sysprx(raw.decode('utf-8'))
+    callback='''extern "C" void cellGcm_fifo_recycle(unsigned int ctx_ea);'''
+    call='''    cellGcm_fifo_recycle((unsigned int)ctx->gpr[3]);   /* r3 = context EA */
+    ctx->gpr[3] = 0;                                   /* CELL_OK */'''
+    if text.count(callback)!=1 or text.count(call)!=1:
+        raise ValueError('Pinned FIFO callback ABI changed')
+    text=text.replace(callback,'''extern "C" int32_t cellGcm_fifo_recycle(unsigned int ctx_ea);''')
+    text=text.replace(call,'''    ctx->gpr[3] = (uint32_t)cellGcm_fifo_recycle((unsigned int)ctx->gpr[3]);''')
     # The output is outside the original source directory.
     for relative in ('../platform/win32_compat.h', '../memory/vm.h'):
         text = text.replace('"'+relative+'"', '"'+(source.parent/relative).resolve().as_posix()+'"')

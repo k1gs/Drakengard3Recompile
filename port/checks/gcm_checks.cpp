@@ -7,6 +7,7 @@
 extern "C" void port_gcm_contract_begin(uint32_t);
 extern "C" uint32_t port_gcm_contract_get();
 extern "C" void port_gcm_contract_default_context(uint32_t);
+extern "C" int port_check_fifo_callback_recycle(uint32_t);
 extern "C" void cellGcm_rsx_process_fifo();
 extern "C" void vm_write32(uint64_t,uint32_t);
 extern "C" uint32_t vm_read32(uint64_t);
@@ -165,7 +166,9 @@ extern "C" int port_check_fifo_flip_boundary()
             tail,unpublished,recycled,tail&&unpublished&&recycled?"PASS":"FAIL");
         ok=ok&&tail&&unpublished&&recycled;
     }
-    return ok?0:1;
+    constexpr uint32_t callback_ea=0x60000000;
+    port_gcm_contract_begin(callback_ea);
+    return port_check_fifo_callback_recycle(callback_ea) && ok?0:1;
 }
 
 extern "C" int port_check_gcm_park()

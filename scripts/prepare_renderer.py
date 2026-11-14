@@ -769,7 +769,7 @@ int port_check_renderer_options(void)
     replace('            dr->tex_rt[_u] = -1;dr->tex_resource[_u]=NULL;',
             '''            dr->tex_rt[_u] = -1;dr->tex_resource[_u]=NULL;
             if(dr->tex[_u].set) {
-                ID3D12Resource* depth_alias=port_depth_texture_alias(dr,(unsigned)_u);
+                ID3D12Resource* depth_alias=port_depth_texture_alias(dr,_d,(unsigned)_u);
                 if(depth_alias) {
                     dr->tex_resource[_u]=depth_alias;
                     srv_write(wslot,depth_alias,DXGI_FORMAT_R8G8B8A8_UNORM,
