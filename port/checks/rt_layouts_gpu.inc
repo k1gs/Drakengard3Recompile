@@ -5,6 +5,65 @@ typedef struct {
     u32 width,height,row_bytes;
     u8 expected[1024];
 } PortRTLayoutRead;
+static int port_rt_check_guest_pipeline(ID3D12Resource** constants,int slots[2])
+{
+    ID3D12Device* device=s_d3d.device;
+    ID3D12GraphicsCommandList* list=s_d3d.cmd_list;
+    const char* shader="struct V{float4 position:SV_Position;"
+        "float4 col0:COLOR0;float4 col1:COLOR1;float4 fog:FOG;"
+        "float4 t0:TEXCOORD0;float4 t1:TEXCOORD1;float4 t2:TEXCOORD2;float4 t3:TEXCOORD3;"
+        "float4 t4:TEXCOORD4;float4 t5:TEXCOORD5;float4 t6:TEXCOORD6;float4 t7:TEXCOORD7;};"
+        "V main(uint i:SV_VertexID){V v=(V)0;v.position=float4(i==2?3:-1,i==1?3:-1,0,1);return v;}";
+    port_rt_require(D3DCompile(shader,strlen(shader),NULL,NULL,NULL,"main","vs_5_0",0,0,&s_d3d.vp_vs_blob,NULL));
+    D3D12_ROOT_PARAMETER param={0};
+    param.ParameterType=D3D12_ROOT_PARAMETER_TYPE_CBV;
+    param.Descriptor.ShaderRegister=1;
+    D3D12_ROOT_SIGNATURE_DESC root={0};
+    root.NumParameters=1;root.pParameters=&param;
+    root.Flags=D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+    ID3DBlob* blob=NULL;
+    port_rt_require(D3D12SerializeRootSignature(&root,D3D_ROOT_SIGNATURE_VERSION_1,&blob,NULL));
+    port_rt_require(device->lpVtbl->CreateRootSignature(device,0,blob->lpVtbl->GetBufferPointer(blob),
+        blob->lpVtbl->GetBufferSize(blob),&IID_ID3D12RootSignature,(void**)&s_d3d.vp_root_sig));
+    blob->lpVtbl->Release(blob);
+    extern u8* vm_base;
+    extern u32 cellGcmResolveLocated(int,u32);
+    D3D12DrawRecord draw={0};draw.fp_addr=0x501;
+    u8* program=vm_base+cellGcmResolveLocated(1,0x500);
+    memset(program,0,32);
+    port_fp_word(program,(1u<<24)|(15u<<9)|1u);
+    port_fp_word(program+4,2u|(1u<<11)|(2u<<13)|(3u<<15)|(7u<<18)|(1u<<23)|(2u<<25)|(3u<<27));
+    const u32 values[4]={0x3F800000,0x3F000000,0x3E800000,0x3F800000};
+    for(unsigned i=0;i<4;i++)port_fp_word(program+16+i*4,values[i]);
+    port_snapshot_fp(&draw);
+    memset(program,0xCD,32);
+    *constants=port_rt_buffer(VP_FPCB_STRIDE,D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ,0);
+    float* data=NULL;D3D12_RANGE none={0,0};
+    port_rt_require((*constants)->lpVtbl->Map(*constants,0,&none,(void**)&data));
+    memset(data,0,VP_FPCB_STRIDE);
+    int count=port_collect_guest_fp(port_draw_fp(&draw),draw.fp_size,data+20);
+    (*constants)->lpVtbl->Unmap(*constants,0,NULL);
+    DXGI_FORMAT formats[4]={DXGI_FORMAT_R16G16B16A16_FLOAT,DXGI_FORMAT_R8G8B8A8_UNORM};
+    PortStencilKey stencil={0};
+    ID3D12PipelineState* pso=vp_get_fp_pso(&draw,-1,draw.fp_addr,0,2,port_pso_rtv_formats(formats,2),1,15,0,0,0,&stencil);
+    formats[1]=DXGI_FORMAT_R16G16B16A16_FLOAT;
+    ID3D12PipelineState* other=vp_get_fp_pso(&draw,-1,draw.fp_addr,0,2,port_pso_rtv_formats(formats,2),1,15,0,0,0,&stencil);
+    if(count!=1 || !pso || !other || pso==other)return 0;
+    slots[0]=off_rt_get(0x95000,0x95000,16,2,2,0x10B);
+    slots[1]=off_rt_get(0x96000,0x96000,8,2,2,0x108);
+    D3D12_CPU_DESCRIPTOR_HANDLE views[2]={off_rt_rtv(slots[0]),off_rt_rtv(slots[1])};
+    for(unsigned i=0;i<2;i++)off_rt_transition(slots[i],D3D12_RESOURCE_STATE_RENDER_TARGET);
+    list->lpVtbl->OMSetRenderTargets(list,2,views,FALSE,NULL);
+    list->lpVtbl->SetGraphicsRootSignature(list,s_d3d.vp_root_sig);
+    list->lpVtbl->SetGraphicsRootConstantBufferView(list,0,(*constants)->lpVtbl->GetGPUVirtualAddress(*constants));
+    list->lpVtbl->SetPipelineState(list,pso);
+    const D3D12_VIEWPORT vp={0,0,2,2,0,1};const D3D12_RECT scissor={0,0,2,2};
+    list->lpVtbl->RSSetViewports(list,1,&vp);
+    list->lpVtbl->RSSetScissorRects(list,1,&scissor);
+    list->lpVtbl->IASetPrimitiveTopology(list,D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    list->lpVtbl->DrawInstanced(list,3,1,0,0);
+    return 1;
+}
 static void port_rt_layout_capture(int slot,unsigned mip,ID3D12Resource* readback,
                                   const u8* guest,u32 pitch,u32 guest_offset,int morton,
                                   PortRTLayoutRead* record,u64* total)
@@ -43,6 +102,7 @@ int port_check_rt_layouts_gpu(void)
     ID3D12CommandQueue* queue=NULL;ID3D12CommandAllocator* allocator=NULL;
     ID3D12GraphicsCommandList* list=NULL;ID3D12Fence* fence=NULL;
     ID3D12DescriptorHeap* srv_heap=NULL;ID3D12Resource* readback=NULL;ID3D12Resource* raw_upload=NULL;
+    ID3D12Resource* fp_constants=NULL;
     HANDLE event=NULL;int software=0,ok=0,stable_binding=0,alias_binding=0;HRESULT hr=S_OK;
     ID3D12Debug* debug=NULL;ID3D12InfoQueue* info=NULL;unsigned validation_errors=0;
     PortRTLayoutRead records[64];unsigned count=0,matched=0,expected_bytes=0;u64 total=0;
@@ -235,6 +295,12 @@ int port_check_rt_layouts_gpu(void)
     list->lpVtbl->ClearRenderTargetView(list,off_rt_rtv(alias_b),blue,0,NULL);
     port_rt_mark_dirty(alias_b);
     port_rt_layout_rgba(overlap+36,32,2,2,0,0,2,2,bb);
+    int mixed[2];
+    if(!port_rt_check_guest_pipeline(&fp_constants,mixed))goto cleanup;
+    u8 mixed_expected[32];
+    const u8 guest_pixel[8]={0x3C,0,0x38,0,0x34,0,0x3C,0};
+    for(unsigned i=0;i<4;i++)memcpy(mixed_expected+i*8,guest_pixel,8);
+    port_rt_layout_capture(mixed[0],0,readback,mixed_expected,16,0,0,&records[count++],&total);
     RT_LAYOUT_TRY(list->lpVtbl->Close(list));
     queue->lpVtbl->ExecuteCommandLists(queue,1,lists);port_rt_require(queue->lpVtbl->Signal(queue,fence,2));s_d3d.fence_values[0]=2;
     port_rt_require(fence->lpVtbl->SetEventOnCompletion(fence,2,event));if(WaitForSingleObject(event,10000)!=WAIT_OBJECT_0)abort();
@@ -258,9 +324,13 @@ int port_check_rt_layouts_gpu(void)
 cleanup:
     fprintf(stderr,"[compat-check] RT layouts GPU device=%s ordered-binding=%d interior-alias=%d records=%u bytes=%u/%u debug=%d errors=%u %s hr=%08lX\n",
         software?"WARP":"hardware",stable_binding,alias_binding,count,matched,expected_bytes,debug_enabled,validation_errors,ok?"PASS":"FAIL",(unsigned long)hr);
-    port_destroy_retired_rts();port_rt_storage_release();memset(&s_d3d,0,sizeof(s_d3d));if(event)CloseHandle(event);
+    port_destroy_retired_rts();port_rt_storage_release();
+    port_release_fp_cache();port_release_fp_snapshots();
+    if(s_d3d.vp_vs_blob)s_d3d.vp_vs_blob->lpVtbl->Release(s_d3d.vp_vs_blob);
+    if(s_d3d.vp_root_sig)s_d3d.vp_root_sig->lpVtbl->Release(s_d3d.vp_root_sig);
+    memset(&s_d3d,0,sizeof(s_d3d));if(event)CloseHandle(event);
 #define RT_LAYOUT_RELEASE(p) if(p)p->lpVtbl->Release(p)
-    RT_LAYOUT_RELEASE(readback);RT_LAYOUT_RELEASE(raw_upload);RT_LAYOUT_RELEASE(srv_heap);
+    RT_LAYOUT_RELEASE(readback);RT_LAYOUT_RELEASE(raw_upload);RT_LAYOUT_RELEASE(srv_heap);RT_LAYOUT_RELEASE(fp_constants);
     RT_LAYOUT_RELEASE(list);RT_LAYOUT_RELEASE(allocator);RT_LAYOUT_RELEASE(queue);RT_LAYOUT_RELEASE(fence);
     RT_LAYOUT_RELEASE(info);RT_LAYOUT_RELEASE(device);RT_LAYOUT_RELEASE(warp);RT_LAYOUT_RELEASE(factory);
 #undef RT_LAYOUT_RELEASE

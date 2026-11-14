@@ -785,6 +785,89 @@ int port_check_renderer_options(void)
     replace('                port_zpass_draw(dr,dr->vb_byte_offset / 256);',
             '''                port_zpass_draw(dr,dr->vb_byte_offset / 256);
                 port_depth_note_write(dr);''')
+    # Record inline constants and bytecode from one version of guest memory.
+    replace('    u32 cb_slot;', '    u32 cb_slot;\n    size_t fp_offset;\n    u32 fp_size;')
+    fp_snapshot=(Path(__file__).resolve().parents[1]/'port/renderer_fp_snapshot.inc').read_text(encoding='utf-8')
+    replace('static u32 port_fp_address_key(',fp_snapshot+'\nstatic u32 port_fp_address_key(')
+    replace('    int ok=stable && buffer && values && exports && big;',
+            '    int ok=port_check_fp_snapshot() && stable && buffer && values && exports && big;')
+    replace('u32 rtfmt;              /* DXGI format of the colour targets (PSO key) */',
+            'u32 rtfmt;              /* Packed DXGI format per bound colour target */')
+    replace('vp_record_cb(s_d3d.draw_count, dr->vs_idx, dr);',
+            'port_snapshot_fp(dr);\n                vp_record_cb(s_d3d.draw_count, dr->vs_idx, dr);',3)
+    replace('    s_d3d.draw_count = 0;\n    s_d3d.vp_parity',
+            '    port_fp_snapshot_used=0;\n    s_d3d.draw_count = 0;\n    s_d3d.vp_parity')
+    replace('    port_zpass_release();\n    port_rt_storage_release();',
+            '    port_zpass_release();\n    port_release_fp_snapshots();\n    port_rt_storage_release();')
+    start=text.index('        if (dr && dr->fp_addr) {',text.index('static void vp_record_cb('))
+    end=text.index('            /* FPK_DBG=',start)
+    text=text[:start]+'''        if (dr && dr->fp_addr) {
+            extern u8* vm_base;
+            extern u32 cellGcmResolveLocated(int,u32);
+            const u8* fp=port_draw_fp(dr);
+            if(fp)port_collect_guest_fp(fp,dr->fp_size,&ts[20]);
+            else memset(&ts[20],0,PORT_FP_CONSTANT_CAPACITY*16);
+'''+text[end:]
+    start=text.index('static ID3D12PipelineState* vp_get_fp_pso(')
+    end=text.index('\n}\n',start)
+    fp=text[start:end]
+    fp=fp.replace('int vs_idx, u32 fp_addr, u32 blend, int nrt,','const D3D12DrawRecord* dr, int vs_idx, u32 fp_addr, u32 blend, int nrt,',1)
+    fp=fp.replace('DXGI_FORMAT rtfmt, int exp32','u32 rtfmt, int exp32',1)
+    fp=fp.replace('    if (rtfmt == 0) rtfmt = DXGI_FORMAT_R8G8B8A8_UNORM;\n','')
+    fp=fp.replace('    extern uint8_t* vm_base;\n    extern u32 cellGcmResolveOffset(u32);\n    if (!fp_addr || !vm_base) return NULL;',
+                  '    const u8* code=port_draw_fp(dr);\n    if(!code)return NULL;')
+    fp=fp.replace('    if (off == 0xFFFFFFFFu) return NULL;\n','')
+    fp=fp.replace('vm_base + off, PORT_FP_PROGRAM_BYTES','code, dr->fp_size')
+    fp=fp.replace('const u8* up = vm_base + off;', 'const u8* up = code;')
+    fp=fp.replace('const u8* uc = vm_base + off;', 'const u8* uc = code;')
+    fp=fp.replace('_b < 32;', '_b < (int)dr->fp_size && _b < 32;')
+    fp=fp.replace('pd.RTVFormats[_r] = rtfmt;', 'pd.RTVFormats[_r] = (DXGI_FORMAT)((rtfmt >> (_r*8))&255u);')
+    if 'vm_base' in fp or fp.count('code, dr->fp_size')!=3 or 'pd.RTVFormats[_r] = rtfmt;' in fp:
+        raise ValueError('Pinned FP replay sources changed')
+    text=text[:start]+fp+text[end:]
+    replace('vp_get_fp_pso(dr->vs_idx, dr->fp_addr, dr->blend_key,',
+            'vp_get_fp_pso(dr, dr->vs_idx, dr->fp_addr, dr->blend_key,',2)
+    replace('static int off_rt_get(','''static u32 port_pso_rtv_formats(const DXGI_FORMAT formats[4],int count)
+{
+    u32 packed=0;
+    for(int i=0;i<count;i++) {
+        if((unsigned)formats[i]>255 || formats[i]==DXGI_FORMAT_UNKNOWN)abort();
+        packed|=(u32)formats[i]<<(8*i);
+    }
+    return packed;
+}
+
+static int off_rt_get(''')
+    start=text.index('        if (dr->fp_addr) texture_pso=vp_get_fp_pso(')
+    end=text.index('        if (perf_on()) s_perf_pso',start)
+    text=text[:start]+'''        if(dr->fp_addr) {
+            int count=dr_num_rts(dr);
+            DXGI_FORMAT format=rsx_surface_dxgi(dr->rt_fmt);
+            DXGI_FORMAT formats[4]={dr->rt_off?format:DXGI_FORMAT_R8G8B8A8_UNORM,format,format,format};
+            texture_pso=vp_get_fp_pso(dr,dr->vs_idx,dr->fp_addr,dr->blend_key,count,
+                port_pso_rtv_formats(formats,count),dr->fp_exp32,dr->cmask,dr->cull,
+                dr_cube_mask(dr),dr->depth_key,&dr->stencil_key);
+        }
+'''+text[end:]
+    start=text.index('                /* Per-draw pipeline: prefer the guest')
+    end=text.index('                s_d3d.cmd_list->lpVtbl->OMSetStencilRef',start)
+    text=text[:start]+'''                /* Match the actual OM descriptor list, including mixed formats. */
+                DXGI_FORMAT formats[4]={cur_rt>=0?(DXGI_FORMAT)s_d3d.off_rt[cur_rt].dxgi:DXGI_FORMAT_R8G8B8A8_UNORM};
+                int count=1;
+                for(int i=0;i<3 && cur_m[i]>=0;i++)
+                    formats[count++]=(DXGI_FORMAT)s_d3d.off_rt[cur_m[i]].dxgi;
+                u32 packed=port_pso_rtv_formats(formats,count);
+                ID3D12PipelineState* dpso=dr->fp_addr?vp_get_fp_pso(dr,dr->vs_idx,dr->fp_addr,dr->blend_key,
+                    count,packed,dr->fp_exp32,dr->cmask,dr->cull,dr_cube_mask(dr),dr->depth_key,&dr->stencil_key):NULL;
+                if(!dpso && (count!=1 || formats[0]!=DXGI_FORMAT_R8G8B8A8_UNORM ||
+                            (dr->depth_required && dr->depth_surface.format!=2) || dr->stencil_key.enabled)) {
+                    fprintf(stderr,"[pso-blocker] frame=%llu draw=%u fp=%08X bytes=%u vs=%08X formats=%08X count=%d depth=%u\\n",
+                        (unsigned long long)s_d3d.frame_count,d,dr->fp_addr,dr->fp_size,dr->vs_hash,packed,count,
+                        dr->depth_required?dr->depth_surface.format:0);
+                    abort();
+                }
+                s_d3d.cmd_list->lpVtbl->SetPipelineState(s_d3d.cmd_list,dpso?dpso:vpso);
+'''+text[end:]
     # Warning budgets must never hide a later D3D12 validation error.
     replace('for (UINT64 mi = 0; mi < n && _printed < 80; mi++) {',
             'for (UINT64 mi = 0; mi < n; mi++) {')
