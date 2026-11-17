@@ -22,6 +22,8 @@ $values = @{
     PS3_DEV_FLASH=(Join-Path $root 'tools/rpcs3/dev_flash');
     PS3_BOOT_PATH='/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN';
     PS3_HLE_UNRESOLVED='fail'
+    # Redirecting stderr otherwise opts into per-event logging on guest threads.
+    PS3_VERBOSE=$(if ($null -eq $env:PS3_VERBOSE) { '0' } else { $env:PS3_VERBOSE })
     PS3_EDAT_CACHE=(Join-Path $runDir 'edat-cache')
     SPU_DUMP_MISS=$jobDir
     PORT_FIFO_DUMP_DIR=$fifoDir
