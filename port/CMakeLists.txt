@@ -121,6 +121,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_gcm.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/gcm_fifo_recycle.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_renderer.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_pipeline_storage.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_feedback_surfaces.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_pix_capture.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/renderer_pix.inc"

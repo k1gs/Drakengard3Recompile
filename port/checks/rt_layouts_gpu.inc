@@ -45,14 +45,23 @@ static int port_rt_check_guest_pipeline(ID3D12Resource** constants,int slots[2])
     (*constants)->lpVtbl->Unmap(*constants,0,NULL);
     DXGI_FORMAT formats[4]={DXGI_FORMAT_R16G16B16A16_FLOAT,DXGI_FORMAT_R16G16B16A16_FLOAT};
     PortStencilKey stencil={0};
+    const unsigned compiles_before=s_perf_fp_compiles;
+    const unsigned first_before=s_perf_fp_first_compiles;
+    const unsigned recomp_before=s_perf_fp_recompiles;
     const unsigned hits_before=s_perf_fp_bytecode_hits;
     ID3D12PipelineState* other=vp_get_fp_pso(&draw,-1,draw.fp_addr,0,2,port_pso_rtv_formats(formats,2),1,15,0,0,0,&stencil);
     formats[1]=DXGI_FORMAT_R8G8B8A8_UNORM;
+    ID3D12PipelineState* culled=vp_get_fp_pso(&draw,-1,draw.fp_addr,0,2,port_pso_rtv_formats(formats,2),1,15,1,0,0,&stencil);
     ID3D12PipelineState* pso=vp_get_fp_pso(&draw,-1,draw.fp_addr,0,2,port_pso_rtv_formats(formats,2),1,15,0,0,0,&stencil);
-    int shared=s_perf_fp_bytecode_hits-hits_before==1;
+    ID3D12PipelineState* same=vp_get_fp_pso(&draw,-1,draw.fp_addr,0,2,port_pso_rtv_formats(formats,2),1,15,0,0,0,&stencil);
+    int distinct=pso && other && culled && pso!=other && pso!=culled && other!=culled && same==pso;
+    int shared=(s_perf_fp_compiles-compiles_before==1 &&
+                s_perf_fp_first_compiles-first_before==1 &&
+                s_perf_fp_recompiles-recomp_before==0 &&
+                s_perf_fp_bytecode_hits-hits_before==2);
     fprintf(stderr,"[rt-layout-test] distinct mixed-format PSOs=%d shared FP bytecode=%d\n",
-        pso && other && pso!=other,shared);
-    if(count!=1 || !pso || !other || pso==other || !shared)return 0;
+        distinct,shared);
+    if(count!=1 || !distinct || !shared)return 0;
     slots[0]=off_rt_get(0x95000,0x95000,16,2,2,0x10B);
     slots[1]=off_rt_get(0x96000,0x96000,8,2,2,0x108);
     D3D12_CPU_DESCRIPTOR_HANDLE views[2]={off_rt_rtv(slots[0]),off_rt_rtv(slots[1])};
