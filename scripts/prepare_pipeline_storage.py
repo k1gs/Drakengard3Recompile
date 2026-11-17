@@ -13,14 +13,17 @@ def prepare(text):
     once('static ID3D12PipelineState* port_find_fp_pso(', r'''
 /* The compiler options are fixed for guest fragment programs. Cache the
  * final source, including sampler declarations and diagnostic rewrites. */
-#define PORT_FP_BYTECODE_SLOTS 256u
+#define PORT_FP_BYTECODE_SLOTS 512u
 #define PORT_FP_BYTECODE_MAX_BYTES (64u * 1024u)
 static struct {
     char* source;
     size_t size;
     ID3DBlob* blob;
+    u32 hash;
 } port_fp_bytecode[PORT_FP_BYTECODE_SLOTS];
 static unsigned s_perf_fp_bytecode_hits;
+static unsigned s_perf_fp_compiles,s_perf_fp_evictions,s_perf_fp_uncached,s_perf_fp_creates;
+static double s_perf_fp_compile_seconds,s_perf_fp_create_seconds;
 
 static void port_drop_fp_bytecode(unsigned slot)
 {
@@ -35,33 +38,54 @@ static HRESULT port_compile_fp(const char* source,ID3DBlob** blob,ID3DBlob** err
     const size_t size=strlen(source);
     const int cacheable=size<=PORT_FP_BYTECODE_MAX_BYTES;
     unsigned slot=0;
+    u32 hash=2166136261u;
     *cache_hit=0;
     if(cacheable) {
-        u32 hash=2166136261u;
         for(size_t i=0;i<size;i++) hash=(hash^(u8)source[i])*16777619u;
-        slot=(hash^(hash>>16))&(PORT_FP_BYTECODE_SLOTS-1);
-        if(port_fp_bytecode[slot].blob && port_fp_bytecode[slot].size==size &&
-           !memcmp(port_fp_bytecode[slot].source,source,size)) {
-            *blob=port_fp_bytecode[slot].blob;
-            (*blob)->lpVtbl->AddRef(*blob);
-            *cache_hit=1;
-            s_perf_fp_bytecode_hits++;
-            return S_OK;
+        const unsigned mask=PORT_FP_BYTECODE_SLOTS-1;
+        const unsigned first=(hash^(hash>>16))&mask;
+        slot=first;
+        /* Keep colliding sources while any slot is free. On saturation a
+         * replacement preserves occupancy, so no probe chain is broken. */
+        for(unsigned probe=0;probe<PORT_FP_BYTECODE_SLOTS;probe++) {
+            const unsigned candidate=(first+probe)&mask;
+            if(!port_fp_bytecode[candidate].blob) {
+                slot=candidate;
+                break;
+            }
+            if(port_fp_bytecode[candidate].hash==hash && port_fp_bytecode[candidate].size==size &&
+               !memcmp(port_fp_bytecode[candidate].source,source,size)) {
+                *blob=port_fp_bytecode[candidate].blob;
+                (*blob)->lpVtbl->AddRef(*blob);
+                *cache_hit=1;
+                s_perf_fp_bytecode_hits++;
+                return S_OK;
+            }
         }
     }
+    const int profiling=perf_on();
+    const double started=profiling ? perf_now() : 0.0;
     HRESULT result=D3DCompile(source,size,"guest_fp",NULL,NULL,"main","ps_5_0",0,0,blob,error);
+    if(profiling) {
+        s_perf_fp_compile_seconds+=perf_now()-started;
+        s_perf_fp_compiles++;
+    }
     if(SUCCEEDED(result) && *blob && cacheable &&
        (*blob)->lpVtbl->GetBufferSize(*blob)<=PORT_FP_BYTECODE_MAX_BYTES) {
         char* copy=(char*)malloc(size);
         if(copy) {
             memcpy(copy,source,size);
+            if(profiling && port_fp_bytecode[slot].blob) s_perf_fp_evictions++;
             port_drop_fp_bytecode(slot);
             port_fp_bytecode[slot].source=copy;
             port_fp_bytecode[slot].size=size;
             port_fp_bytecode[slot].blob=*blob;
+            port_fp_bytecode[slot].hash=hash;
             (*blob)->lpVtbl->AddRef(*blob);
+            return result;
         }
     }
+    if(profiling) s_perf_fp_uncached++;
     return result;
 }
 
@@ -110,6 +134,25 @@ static ULONG STDMETHODCALLTYPE port_check_pso_release(ID3D12PipelineState* pso)
 {
     (void)pso;port_check_pso_releases++;return 0;
 }
+static int port_check_fp_cache_collision(void)
+{
+    /* Both sources start in the same bucket, with distinct outputs. */
+    const char* source[]={"float4 main():SV_Target{return float4(12.0,0,0,1);}",
+                          "float4 main():SV_Target{return float4(26.0,0,0,1);}"};
+    ID3DBlob* blobs[4]={0};
+    int ok=1;
+    for(unsigned i=0;i<4;i++) {
+        ID3DBlob* error=NULL;
+        int hit;
+        HRESULT hr=port_compile_fp(source[i%2],&blobs[i],&error,&hit);
+        if(error) error->lpVtbl->Release(error);
+        if(FAILED(hr) || !blobs[i] || hit!=(i>=2)) ok=0;
+    }
+    ok=ok && blobs[0]!=blobs[1] && blobs[0]==blobs[2] && blobs[1]==blobs[3];
+    for(unsigned i=0;i<4;i++) if(blobs[i]) blobs[i]->lpVtbl->Release(blobs[i]);
+    fprintf(stderr,"[compat-check] colliding fragment programs retained=%d\n",ok);
+    return ok;
+}
 int port_check_pipeline_cache(void)''')
     once(r'''    memset(&s_d3d.vp_fp[0],0,sizeof(VPFPEntry));s_d3d.vp_fp_n=0;
     fprintf(stderr,"[compat-check] pipeline cache relocated hits=%u state misses=%u %s\n",hits,misses,ok?"PASS":"FAIL");''', r'''
@@ -141,6 +184,8 @@ int port_check_pipeline_cache(void)''')
     for(unsigned i=0;i<3;i++) s_d3d.vp_fp[s_d3d.vp_fp_n++].pso=&mock;
     port_release_fp_cache();
     if(port_check_pso_releases!=3 || s_d3d.vp_fp || s_d3d.vp_fp_n || s_d3d.vp_fp_capacity) ok=0;
+    ok=port_check_fp_cache_collision() && ok;
+    port_release_fp_cache();
     fprintf(stderr,"[compat-check] pipeline cache relocated hits=%u state misses=%u retained=%d releases=%u %s\n",hits,misses,retained,port_check_pso_releases,ok?"PASS":"FAIL");''')
     # The existing backend shutdown waits for GPU completion before this point.
     once('    /* Release retained texture resources after the shutdown fence. */',
@@ -155,5 +200,23 @@ int port_check_pipeline_cache(void)''')
     once('s_perf_pso_miss, s_perf_pso_hashbytes / 1024,',
          's_perf_pso_miss, s_perf_pso_hashbytes / 1024, s_perf_fp_bytecode_hits,')
     once('s_perf_pso_calls = 0; s_perf_pso_miss = 0; s_perf_pso_hashbytes = 0;',
-         's_perf_pso_calls = 0; s_perf_pso_miss = 0; s_perf_pso_hashbytes = 0; s_perf_fp_bytecode_hits = 0;')
+         's_perf_pso_calls = 0; s_perf_pso_miss = 0; s_perf_pso_hashbytes = 0; s_perf_fp_bytecode_hits = 0;\n'
+         '            s_perf_fp_compiles = s_perf_fp_evictions = s_perf_fp_uncached = s_perf_fp_creates = 0;\n'
+         '            s_perf_fp_compile_seconds = s_perf_fp_create_seconds = 0.0;')
+    once(r'''    hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(
+        s_d3d.device, &pd, &IID_ID3D12PipelineState, (void**)&pso);
+    if(trace) fprintf(stderr,"[RENDER] PSO end seq=%u ms=%llu hr=%08lX\n",seq,GetTickCount64()-compile_started,(unsigned long)hr);''',r'''    const int profile_create=perf_on();
+    const double create_started=profile_create ? perf_now() : 0.0;
+    hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(
+        s_d3d.device, &pd, &IID_ID3D12PipelineState, (void**)&pso);
+    if(profile_create) {
+        s_perf_fp_create_seconds+=perf_now()-create_started;
+        s_perf_fp_creates++;
+    }
+    if(trace) fprintf(stderr,"[RENDER] PSO end seq=%u ms=%llu hr=%08lX\n",seq,GetTickCount64()-compile_started,(unsigned long)hr);''')
+    once('            s_perf_frame = 0.0; s_perf_tex',r'''            if(s_perf_fp_compiles || s_perf_fp_creates)
+                fprintf(stderr,"[FP-perf] compile=%.3fs/%u create=%.3fs/%u hits=%u evictions=%u uncached=%u\n",
+                    s_perf_fp_compile_seconds,s_perf_fp_compiles,s_perf_fp_create_seconds,s_perf_fp_creates,
+                    s_perf_fp_bytecode_hits,s_perf_fp_evictions,s_perf_fp_uncached);
+            s_perf_frame = 0.0; s_perf_tex''')
     return text
