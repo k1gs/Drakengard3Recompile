@@ -5,7 +5,7 @@ from prepare_texture_units import prepare as prepare_texture_units
 from prepare_frame_boundaries import prepare as prepare_frame_boundaries
 from prepare_texture_cache import prepare as prepare_texture_cache
 from prepare_vertex_fetch import prepare as prepare_vertex_fetch
-from prepare_pipeline_storage import prepare as prepare_pipeline_storage
+from prepare_pipeline_storage import prepare as prepare_pipeline_storage, prepare_prewarm as prepare_pipeline_prewarm
 from prepare_depth_surfaces import prepare as prepare_depth_surfaces
 from prepare_feedback_surfaces import prepare as prepare_feedback_surfaces
 from prepare_pix_capture import prepare as prepare_pix_capture
@@ -849,6 +849,7 @@ static int off_rt_get(''')
                 dr_cube_mask(dr),dr->depth_key,&dr->stencil_key);
         }
 '''+text[end:]
+    text=prepare_pipeline_prewarm(text)
     start=text.index('                /* Per-draw pipeline: prefer the guest')
     end=text.index('                s_d3d.cmd_list->lpVtbl->OMSetStencilRef',start)
     text=text[:start]+'''                /* Match the actual OM descriptor list, including mixed formats. */

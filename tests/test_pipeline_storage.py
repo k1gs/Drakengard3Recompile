@@ -24,4 +24,5 @@ class PipelineStoragePreparationTests(unittest.TestCase):
             self.assertIn('#define PORT_FP_BYTECODE_SLOTS 4096u', first)
             self.assertIn('#define PORT_FP_BYTECODE_MAX_TOTAL_BYTES (48u * 1024u * 1024u)', first)
             self.assertIn('#define PORT_FP_HISTORY_MAX_TOTAL_BYTES (16u * 1024u * 1024u)', first)
-            self.assertIn('first=%.3fs/%u recompile=%.3fs/%u', first)
+            self.assertIn('cpu=%.3fs parallel=%u first=%.3fs/%u recompile=%.3fs/%u', first)
+            self.assertIn('port_prewarm_batch_fp();', first)
