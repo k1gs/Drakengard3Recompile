@@ -21,6 +21,20 @@ from prepare_rt_layouts import prepare as prepare_rt_layouts
 
 
 def prepare(sdk, output):
+    # Both source and destination temporary indices occupy six bits. Keep the
+    # HLSL storage and initialization valid for every index the decoder emits.
+    fp_source=sdk/'libs/video/rsx_fp_decompiler.c'
+    fp_text=fp_source.read_text(encoding='utf-8')
+    for old,new in (
+        ('float4 r[48]; float4 h[48];', 'float4 r[64]; float4 h[64];'),
+        ('_i < 48; _i++', '_i < 64; _i++'),
+    ):
+        if fp_text.count(old)!=1:
+            raise ValueError('Pinned fragment register declaration changed: '+old)
+        fp_text=fp_text.replace(old,new)
+    fp_target=output/'rsx_fp_decompiler_compat.c'
+    if not fp_target.exists() or fp_target.read_text(encoding='utf-8')!=fp_text:
+        fp_target.write_text(fp_text,encoding='utf-8')
     source=sdk/'libs/video/rsx_d3d12_backend.c'
     text=source.read_text(encoding='utf-8')
     start=text.index('    /* Garbage-projection fallback (vkcube; see the original comment). */')
@@ -517,6 +531,7 @@ static void port_fp_word(u8* p,u32 word)
     u32 swapped=(word<<16)|(word>>16);
     p[0]=(u8)(swapped>>24);p[1]=(u8)(swapped>>16);p[2]=(u8)(swapped>>8);p[3]=(u8)swapped;
 }
+''' + (Path(__file__).resolve().parents[1]/'port/checks/fp_registers.inc').read_text(encoding='utf-8') + r'''
 int port_check_fragment_constants(void)
 {
     u8 prog[32]={0};
@@ -555,7 +570,7 @@ int port_check_fragment_constants(void)
         if(!bank) big=0;
         fprintf(stderr,"[compat-check] fragment bank bytes=%u collected=%d last=%g stride=%u %s\n",slots*32,collected,uploaded[(slots-1)*4],VP_FPCB_STRIDE,bank?"PASS":"FAIL");
     }
-    int ok=stable && buffer && values && exports && big;
+    int ok=port_check_fp_registers() && stable && buffer && values && exports && big;
     fprintf(stderr,"[compat-check] fragment constants source-stable=%d buffered=%d values=%d exports=%d %s\n",stable,buffer,values,exports,ok?"PASS":"FAIL");
     free(first);free(second);return ok?0:1;
 }
@@ -789,8 +804,8 @@ int port_check_renderer_options(void)
     replace('    u32 cb_slot;', '    u32 cb_slot;\n    size_t fp_offset;\n    u32 fp_size;')
     fp_snapshot=(Path(__file__).resolve().parents[1]/'port/renderer_fp_snapshot.inc').read_text(encoding='utf-8')
     replace('static u32 port_fp_address_key(',fp_snapshot+'\nstatic u32 port_fp_address_key(')
-    replace('    int ok=stable && buffer && values && exports && big;',
-            '    int ok=port_check_fp_snapshot() && stable && buffer && values && exports && big;')
+    replace('    int ok=port_check_fp_registers() && stable && buffer && values && exports && big;',
+            '    int ok=port_check_fp_snapshot() && port_check_fp_registers() && stable && buffer && values && exports && big;')
     replace('u32 rtfmt;              /* DXGI format of the colour targets (PSO key) */',
             'u32 rtfmt;              /* Packed DXGI format per bound colour target */')
     replace('vp_record_cb(s_d3d.draw_count, dr->vs_idx, dr);',
