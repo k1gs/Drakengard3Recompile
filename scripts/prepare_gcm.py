@@ -234,7 +234,7 @@ void port_gcm_contract_default_context(u32 context) {
         raise ValueError('Pinned FIFO cursor changed')
     text=text.replace(wrap_anchor,'''/* Protected by s_gcm_fifo_lock, like the FIFO cursor. */
 static struct {
-    u32 context,current,from,to,passes,last_start;
+    u32 context,current,end,from,to,passes,last_start;
     const char* last_stop;
     int jump_published,acknowledged;
 } port_fifo_wrap;
@@ -256,6 +256,7 @@ static void port_fifo_wrap_reset(void) { memset(&port_fifo_wrap,0,sizeof(port_fi
          * PUT and the producer cursor must still belong to this request. */
         if(!port_fifo_wrap.jump_published && s_fifo_getoff==port_fifo_wrap.from &&
            put==port_fifo_wrap.from && vm_read32(GCM_CONTROL_GUEST_ADDR)==put &&
+           vm_read32(port_fifo_wrap.context+4)==port_fifo_wrap.current &&
            vm_read32(port_fifo_wrap.context+8)==port_fifo_wrap.current &&
            gcm_io2ea(put)==port_fifo_wrap.current &&
            vm_read32(port_fifo_wrap.current)==(0x20000000u|port_fifo_wrap.to)) {
