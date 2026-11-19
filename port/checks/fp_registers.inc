@@ -1,3 +1,38 @@
+static int port_check_fp_predicated_selection(char* hlsl)
+{
+    u8 program[112]={0};
+    const u32 xyzw=(1u<<11)|(2u<<13)|(3u<<15);
+    const u32 cc_xyzw=(1u<<23)|(2u<<25)|(3u<<27);
+    const u32 always=(7u<<18)|cc_xyzw;
+    /* Read the destination, predicate and alternative value independently
+     * from b1 so the compiler must preserve the per-lane runtime selection. */
+    port_fp_word(program,(1u<<24)|(15u<<9));
+    port_fp_word(program+4,2u|xyzw|always);
+    port_fp_word(program+32,(1u<<24)|(1u<<30)|(1u<<8)|(15u<<9));
+    port_fp_word(program+36,2u|xyzw|always);
+    port_fp_word(program+64,(1u<<24)|(5u<<9));
+    port_fp_word(program+68,2u|xyzw|cc_xyzw|(4u<<18));
+    port_fp_word(program+96,1u);
+
+    ID3DBlob* shader=NULL;
+    ID3DBlob* assembly=NULL;
+    int decoded=port_decompile_guest_fp(program,sizeof(program),1,0,hlsl,RSX_FP_HLSL_BUFFER_SIZE);
+    HRESULT hr=decoded>0 ? D3DCompile(hlsl,strlen(hlsl),"fp-predicate-check",NULL,NULL,
+        "main","ps_5_0",0,0,&shader,NULL) : E_FAIL;
+    if(SUCCEEDED(hr) && shader)
+        hr=D3DDisassemble(shader->lpVtbl->GetBufferPointer(shader),
+            shader->lpVtbl->GetBufferSize(shader),0,NULL,&assembly);
+    const char* instructions=assembly?(const char*)assembly->lpVtbl->GetBufferPointer(assembly):"";
+    int conditional_move=SUCCEEDED(hr) && strstr(instructions,"movc ")!=NULL;
+    int ok=conditional_move &&
+        strstr(hlsl,"r[0].xz = _p.xz ? _v.xz : r[0].xz;");
+    if(assembly) assembly->lpVtbl->Release(assembly);
+    if(shader) shader->lpVtbl->Release(shader);
+    fprintf(stderr,"[compat-check] fragment predicate masked conditional move=%d %s\n",
+        conditional_move,ok?"PASS":"FAIL");
+    return ok;
+}
+
 /* Compile the actual decompiler output for both six-bit temporary files.
  * The first instruction writes a constant into the selected register. The
  * second reads it into the selected colour export. Predicated writes also
@@ -48,7 +83,8 @@ static int port_check_fp_registers(void)
             }
         }
     }
+    const int selection=port_check_fp_predicated_selection(hlsl);
     free(hlsl);
     fprintf(stderr,"[compat-check] fragment registers r0..63/h0..63 direct/predicated compiled=%u/256 PASS\n",compiled);
-    return compiled==256;
+    return compiled==256 && selection;
 }

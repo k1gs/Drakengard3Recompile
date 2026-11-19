@@ -25,6 +25,25 @@ def prepare(sdk, output):
     # HLSL storage and initialization valid for every index the decoder emits.
     fp_source=sdk/'libs/video/rsx_fp_decompiler.c'
     fp_text=fp_source.read_text(encoding='utf-8')
+    # The masked register write must select a lane without arithmetic on the
+    # inactive value. A lerp can propagate NaNs/Infs or round an active value.
+    for old, new in (
+        ('''                        /* Per-component select gated by the CC sign test.
+                         * lerp(dst, _v, mask) == mask ? _v : dst since the
+                         * mask is exactly 0.0/1.0 from the bool->float cast. */''',
+         '                        /* Select register lanes by the CC sign test. */'),
+        (r'''                                 "      float4 _p = (float4)((cc%u).%s %s (float4)0.0);\n"
+                                 "      %s[%u].%s = lerp(%s[%u].%s, _v.%s, _p.%s);\n",
+                                 cc_read, cswz, cmp_op,
+                                 reg, dst_idx, m, reg, dst_idx, m, m, m);''',
+         r'''                                 "      bool4 _p = (cc%u).%s %s (float4)0.0;\n"
+                                 "      %s[%u].%s = _p.%s ? _v.%s : %s[%u].%s;\n",
+                                 cc_read, cswz, cmp_op,
+                                 reg, dst_idx, m, m, m, reg, dst_idx, m);'''),
+    ):
+        if fp_text.count(old) != 1:
+            raise ValueError('Pinned fragment predicate emission changed')
+        fp_text = fp_text.replace(old, new)
     for old,new in (
         ('float4 r[48]; float4 h[48];', 'float4 r[64]; float4 h[64];'),
         ('_i < 48; _i++', '_i < 64; _i++'),
