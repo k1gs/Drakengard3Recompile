@@ -60,14 +60,44 @@ int port_check_texture_units(void)
         d3d12_bind_texture(NULL,u,&tex);
     }
     port_snapshot_textures(&dr);
-    memset(s_d3d.cur_texs,0,sizeof(s_d3d.cur_texs));
     for(unsigned u=0;u<PORT_TEXTURE_UNITS;u++) {
         if(!dr.tex[u].set || dr.tex[u].raw!=0x1000+u*0x1000 ||
            dr.tex[u].w!=16+u || dr.tex[u].h!=32+u ||
            dr.tex[u].ctrl1!=0xAAE4 || dr.tex_rt[u]!=-1) ok=0;
     }
-    fprintf(stderr,"[compat-check] texture units bound/snapshotted=%u unit15=%08X %s\n",
-        PORT_TEXTURE_UNITS,dr.tex[15].raw,ok?"PASS":"FAIL");
+    const unsigned unit=11;
+    rsx_texture_state tex={0};
+    tex.offset=0x1000+unit*0x1000;
+    tex.image_rect=((16+unit)<<16)|(32+unit);
+    tex.format=(1u<<16)|(0x85u<<8)|1u;
+    tex.control0=0x00060000u;
+    d3d12_bind_texture(NULL,unit,&tex);
+    D3D12DrawRecord disabled={0};
+    port_snapshot_textures(&disabled);
+    D3D12_SAMPLER_DESC sampler;
+    int unbound=!disabled.tex[unit].set && port_decode_sampler(&disabled,unit,&sampler);
+    tex.control0|=0x80000000u;
+    d3d12_bind_texture(NULL,unit,&tex);
+    D3D12DrawRecord enabled={0};
+    port_snapshot_textures(&enabled);
+    int invalid_enabled=enabled.tex[unit].set && !port_decode_sampler(&enabled,unit,&sampler);
+    tex.format=(1u<<16)|(0x81u<<8)|1u;
+    tex.address=0x00030303u;
+    tex.filter=0x01010000u;
+    d3d12_bind_texture(NULL,unit,&tex);
+    D3D12DrawRecord rebound={0};
+    port_snapshot_textures(&rebound);
+    int rebound_ok=rebound.tex[unit].set && port_decode_sampler(&rebound,unit,&sampler) && s_d3d.tex_bound;
+    tex.control0=0x00060000u;
+    d3d12_bind_texture(NULL,unit-1,&tex);
+    int other_kept=s_d3d.tex_bound;
+    d3d12_bind_texture(NULL,unit,&tex);
+    int legacy_unbound=!s_d3d.tex_bound;
+    int retained=dr.tex[unit].set && dr.tex[unit].raw==tex.offset && !disabled.tex[unit].set;
+    memset(s_d3d.cur_texs,0,sizeof(s_d3d.cur_texs));
+    ok=ok && unbound && invalid_enabled && retained && rebound_ok && other_kept && legacy_unbound;
+    fprintf(stderr,"[compat-check] texture units bound/snapshotted=%u unit15=%08X disabled=%d invalid-enabled=%d retained=%d rebound=%d legacy-unbound=%d %s\n",
+        PORT_TEXTURE_UNITS,dr.tex[15].raw,unbound,invalid_enabled,retained,rebound_ok,other_kept&&legacy_unbound,ok?"PASS":"FAIL");
     return ok?0:1;
 }
 '''

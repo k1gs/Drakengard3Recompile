@@ -14,6 +14,21 @@ def prepare(text):
          'fmt, ctrl1, mips, sampler_address, sampler_filter, sampler_control, sampler_border; int cube;')
     once('        COPY_TEX(ctrl1);',
          '        COPY_TEX(sampler_address);COPY_TEX(sampler_filter);COPY_TEX(sampler_control);COPY_TEX(sampler_border);\n        COPY_TEX(ctrl1);')
+    once('    int                   tex_bound;            /* a texture is bound for draws */',
+         '    int                   tex_bound;            /* a texture is bound for draws */\n'
+         '    u32                   tex_bound_unit;       /* owner of the legacy B8 binding */')
+    bind = 'static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)\n{\n    (void)ud;'
+    once(bind, bind + '''
+    if (unit >= PORT_TEXTURE_UNITS) return;
+    if (!(tex->control0 & 0x80000000u)) {
+        /* CONTROL0 can disable a unit while its image registers stay set. */
+        memset(&s_d3d.cur_texs[unit], 0, sizeof(s_d3d.cur_texs[unit]));
+        if (s_d3d.tex_bound && s_d3d.tex_bound_unit == unit)
+            s_d3d.tex_bound = 0;
+        return;
+    }''')
+    once('        s_d3d.tex_bound = 1;\n        s_d3d.tex_dirty = 1;',
+         '        s_d3d.tex_bound = 1;\n        s_d3d.tex_bound_unit = unit;\n        s_d3d.tex_dirty = 1;')
     once('        s_d3d.cur_texs[unit].ctrl1 = tex->control1;',
          '        s_d3d.cur_texs[unit].sampler_address=tex->address;\n'
          '        s_d3d.cur_texs[unit].sampler_filter=tex->filter;\n'
@@ -22,11 +37,11 @@ def prepare(text):
          '        s_d3d.cur_texs[unit].ctrl1 = tex->control1;')
     once('        tex.control1=0xAAE4;',
          '        tex.control1=0xAAE4;tex.address=0x00030301;\n'
-         '        tex.filter=0x02060000|u;tex.control0=(12u<<7);tex.border_color=0xAABBCC00|u;')
+         '        tex.filter=0x02060000|u;tex.control0=0x80000000u|(12u<<7);tex.border_color=0xAABBCC00|u;')
     once('           dr.tex[u].ctrl1!=0xAAE4 || dr.tex_rt[u]!=-1)',
          '           dr.tex[u].ctrl1!=0xAAE4 || dr.tex_rt[u]!=-1 ||\n'
          '           dr.tex[u].sampler_address!=0x00030301 || dr.tex[u].sampler_filter!=(0x02060000|u) ||\n'
-         '           dr.tex[u].sampler_control!=(12u<<7) || dr.tex[u].sampler_border!=(0xAABBCC00|u))')
+         '           dr.tex[u].sampler_control!=(0x80000000u|(12u<<7)) || dr.tex[u].sampler_border!=(0xAABBCC00|u))')
     begin = text.index('        D3D12_STATIC_SAMPLER_DESC samp[PORT_TEXTURE_UNITS]')
     end = text.index('        D3D12_ROOT_SIGNATURE_DESC rd = {0};', begin)
     text = text[:begin] + '''        D3D12_DESCRIPTOR_RANGE sampler_range={0};
