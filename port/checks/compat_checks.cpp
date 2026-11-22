@@ -1,5 +1,6 @@
 #include "ppu_recomp.h"
 #include "ps3emu/nid.h"
+#include "ps3emu/error_codes.h"
 #include <cstdio>
 #include <cstring>
 #include <array>
@@ -358,6 +359,58 @@ extern "C" int port_check_lwcond_layout()
     bool ok = ctx.gpr[3] == 0 && vm_read32(condition) == mutex && vm_read32(condition+4) != 0;
     for (int i = -8; i < 16; ++i)
         if ((i < 0 || i >= 8) && vm_base[condition+i] != 0xA5) ok = false;
-    fprintf(stderr, "[compat-check] lwcond BE32 pointer, queue ID, adjacent canaries: %s\n", ok ? "PASS" : "FAIL");
+    if (!ok)
+        return 1;
+
+    const auto call = [](ppu_context& thread, const char* name, uint32_t ea, uint64_t arg = 0) {
+        thread.gpr[3] = ea;
+        thread.gpr[4] = arg;
+        ps3_hle_call(ps3_compute_nid(name), &thread);
+        return static_cast<uint32_t>(thread.gpr[3]);
+    };
+    if (call(ctx, "sys_lwmutex_create", mutex) != CELL_OK ||
+        call(ctx, "sys_lwmutex_lock", mutex) != CELL_OK)
+        return 2;
+    // A signal without waiters is not sticky. A timed-out wait also owns
+    // the mutex again before the guest is allowed to proceed.
+    const bool no_credit = call(ctx, "sys_lwcond_signal", condition) == CELL_OK &&
+        call(ctx, "sys_lwcond_wait", condition, 20000) == CELL_ETIMEDOUT &&
+        vm_read32(mutex) == 1 && vm_read32(mutex + 0xC) == 1;
+    call(ctx, "sys_lwmutex_unlock", mutex);
+
+    std::atomic<bool> locked{false}, completed{false};
+    uint32_t result = CELL_EINVAL;
+    bool reacquired = false;
+    std::thread waiter([&] {
+        ppu_context other{};
+        other.thread_id = 2;
+        other.gpr[1] = 0x48000;
+        call(other, "sys_lwmutex_lock", mutex);
+        call(other, "sys_lwmutex_lock", mutex);
+        locked.store(true);
+        result = call(other, "sys_lwcond_wait", condition, 2000000);
+        reacquired = vm_read32(mutex) == 2 && vm_read32(mutex + 0xC) == 2;
+        completed.store(true);
+        call(other, "sys_lwmutex_unlock", mutex);
+        call(other, "sys_lwmutex_unlock", mutex);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (!locked.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    const bool held = locked.load() && call(ctx, "sys_lwmutex_lock", mutex, 500000) == CELL_OK;
+    bool notified = false;
+    if (held) {
+        // Taking the same mutex proves the waiter entered its release phase.
+        notified = call(ctx, "sys_lwcond_signal_to", condition, 3) == CELL_EPERM &&
+            call(ctx, "sys_lwcond_signal_to", condition, 2) == CELL_OK &&
+            !completed.load() && vm_read32(mutex) == 1;
+        call(ctx, "sys_lwmutex_unlock", mutex);
+    }
+    waiter.join();
+    const bool destroyed = call(ctx, "sys_lwcond_destroy", condition) == CELL_OK &&
+        call(ctx, "sys_lwcond_signal", condition) == CELL_ESRCH;
+    ok = no_credit && notified && result == CELL_OK && reacquired && destroyed;
+    fprintf(stderr, "[compat-check] lwcond layout=1 no-credit-timeout=%d targeted=%d recursive-reacquire=%d destroy=%d %s\n",
+            no_credit, notified, result == CELL_OK && reacquired, destroyed, ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;
 }

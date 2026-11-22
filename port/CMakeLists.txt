@@ -169,6 +169,8 @@ execute_process(COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_ppu_vmx.py"
     --lift "${RECOMP_DIR}"
     COMMAND_ERROR_IS_FATAL ANY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/lwcond_wait.inc")
 execute_process(COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_runtime.py"
     --sdk "${PS3RECOMP_DIR}" --out "${CMAKE_CURRENT_BINARY_DIR}/ppu_sysprx.cpp"
