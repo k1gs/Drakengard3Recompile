@@ -4,6 +4,8 @@
 #include <cstring>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include "ppu_recomp.h"
+extern "C" PPU_THREAD_LOCAL ppu_context* g_active_ctx;
 extern "C" void port_gcm_contract_begin(uint32_t);
 extern "C" uint32_t port_gcm_contract_get();
 extern "C" void port_gcm_contract_default_context(uint32_t);
@@ -15,8 +17,12 @@ extern "C" uint32_t ppu_hle_inject_base;
 extern "C" void* cellGcm_fifo_kick_event();
 extern "C" int32_t cellGcmSetDisplayBuffer(uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
 extern "C" int32_t cellGcmSetPrepareFlip(void*,uint32_t);
+extern "C" int32_t cellGcmSetFlipImmediate(uint32_t);
+extern "C" uint32_t cellGcmGetCurrentDisplayBufferId();
+extern "C" int32_t cellGcmGetDisplayBufferByFlipIndex(uint32_t);
 extern "C" unsigned cellGcm_flip_request_count();
 extern "C" void cellGcmSetFlipHandler(void*);
+extern "C" void cellGcmSetUserHandler(void*);
 extern "C" void cellGcmTickFlip();
 extern "C" void ppu_gcm_pump();
 using GuestCaller=void(*)(uint32_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
@@ -28,6 +34,113 @@ static void count_flip(uint32_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uin
 }
 
 extern "C" void port_gcm_contract_render_state(uint32_t[8]);
+
+static unsigned user_callback_count;
+static uint32_t user_callback_cause;
+
+static void acknowledge_user_command(uint32_t, uint64_t cause, uint64_t, uint64_t,
+                                     uint64_t, uint64_t, uint64_t, uint64_t, uint64_t)
+{
+    ++user_callback_count;
+    user_callback_cause = static_cast<uint32_t>(cause);
+    vm_write32(ppu_hle_inject_base + 0xFE0, user_callback_cause & 0xFFFF);
+}
+
+static bool check_user_command_wait()
+{
+    constexpr uint32_t fifo = 0x60000000;
+    const uint32_t control = ppu_hle_inject_base + 0x2000;
+    const uint32_t label = ppu_hle_inject_base + 0xFE0;
+    const auto previous_caller = g_ps3_guest_caller;
+    ppu_gcm_pump();
+    g_ps3_guest_caller = acknowledge_user_command;
+    cellGcmSetUserHandler(reinterpret_cast<void*>(static_cast<uintptr_t>(fifo + 0x100)));
+    bool passed = true;
+    for (uint32_t cause : {0u, 0x00010001u}) {
+        port_gcm_contract_begin(fifo);
+        vm_write32(label, 0xFF);
+        vm_write32(fifo, 0x0004EB00);
+        vm_write32(fifo + 4, cause);
+        vm_write32(fifo + 8, 0x000C0064);
+        vm_write32(fifo + 12, 0xFE0);
+        vm_write32(fifo + 16, cause & 0xFFFF);
+        vm_write32(fifo + 20, 0xFF);
+        vm_write32(control, 24);
+        user_callback_count = 0;
+        cellGcm_rsx_process_fifo();
+        const bool waiting = port_gcm_contract_get() == 8 && !user_callback_count && vm_read32(label) == 0xFF;
+        // The guest can wait for REF without crossing another HLE import.
+        // A host-side register inspection must not run guest callbacks.
+        auto* previous_context = g_active_ctx;
+        g_active_ctx = nullptr;
+        vm_read32(control + 8);
+        const bool host_read_passive = user_callback_count == 0;
+        ppu_context polling_guest{};
+        g_active_ctx = &polling_guest;
+        vm_read32(control + 8);
+        g_active_ctx = previous_context;
+        const bool delivered = user_callback_count == 1 && user_callback_cause == cause &&
+                               vm_read32(label) == (cause & 0xFFFF);
+        cellGcm_rsx_process_fifo();
+        ppu_gcm_pump();
+        const bool finished = port_gcm_contract_get() == 24 && vm_read32(label) == 0xFF &&
+                              user_callback_count == 1;
+        passed = passed && waiting && host_read_passive && delivered && finished;
+    }
+    cellGcmSetUserHandler(nullptr);
+    g_ps3_guest_caller = previous_caller;
+    return passed;
+}
+
+extern "C" int port_check_fifo_semaphore()
+{
+    constexpr uint32_t fifo = 0x60000000;
+    constexpr uint32_t offset = 0xFE0;
+    const uint32_t label = ppu_hle_inject_base + offset;
+    const uint32_t control = ppu_hle_inject_base + 0x2000;
+    port_gcm_contract_begin(fifo);
+
+    // Two ACQUIRE arguments in one non-incrementing packet. Once the first
+    // value has been observed, the producer may replace it with the second.
+    vm_write32(fifo, 0x00040064);
+    vm_write32(fifo + 4, offset);
+    vm_write32(fifo + 8, 0x40080068);
+    vm_write32(fifo + 12, 0x1234);
+    vm_write32(fifo + 16, 0x5678);
+    vm_write32(fifo + 20, 0x0004006C);
+    vm_write32(fifo + 24, 0xCAFE);
+    vm_write32(control, 28);
+    vm_write32(label, 0);
+    cellGcm_rsx_process_fifo();
+    const bool held_first = port_gcm_contract_get() == 8 && vm_read32(label) == 0;
+    vm_write32(label, 0x1234);
+    cellGcm_rsx_process_fifo();
+    cellGcm_rsx_process_fifo();
+    const bool held_second = port_gcm_contract_get() == 8 && vm_read32(label) == 0x1234;
+    vm_write32(label, 0x5678);
+    cellGcm_rsx_process_fifo();
+    const bool released = port_gcm_contract_get() == 28 && vm_read32(label) == 0xCAFE;
+
+    // OFFSET, ACQUIRE and RELEASE may also share an incrementing packet.
+    vm_write32(fifo + 28, 0x000C0064);
+    vm_write32(fifo + 32, offset);
+    vm_write32(fifo + 36, 0xABCD);
+    vm_write32(fifo + 40, 0xFACE);
+    vm_write32(control, 44);
+    cellGcm_rsx_process_fifo();
+    const bool held_packet = port_gcm_contract_get() == 28 && vm_read32(label) == 0xCAFE;
+    vm_write32(label, 0xABCD);
+    cellGcm_rsx_process_fifo();
+    const bool finished = port_gcm_contract_get() == 44 && vm_read32(label) == 0xFACE;
+
+    const bool user_command = check_user_command_wait();
+    const bool passed = held_first && held_second && released && held_packet && finished && user_command;
+    std::fprintf(stderr, "[compat-check] FIFO semaphore held-first=%d held-second=%d "
+                 "released=%d held-packet=%d finished=%d user-command=%d %s\n",
+                 held_first, held_second, released, held_packet, finished, user_command, passed ? "PASS" : "FAIL");
+    return passed ? 0 : 1;
+}
+
 extern "C" int port_check_fifo_engine_isolation()
 {
     constexpr uint32_t ea=0x60000000;
@@ -66,50 +179,92 @@ extern "C" int port_check_fifo_engine_isolation()
     return ok?0:1;
 }
 
+static bool check_display_queue(bool active_default)
+{
+    constexpr uint32_t fifo = 0x60000000;
+    constexpr uint32_t context = fifo + 0x80000;
+    const uint32_t control = ppu_hle_inject_base + 0x2000;
+    port_gcm_contract_begin(fifo);
+    for (uint32_t id : {2u, 0u, 1u}) {
+        if (cellGcmSetDisplayBuffer(id, id * 0x400000u, 5120, 1280, 720))
+            return false;
+    }
+
+    vm_write32(context, fifo);
+    vm_write32(context + 4, fifo + 0x10000);
+    vm_write32(context + 8, fifo);
+    vm_write32(context + 12, 0);
+    if (active_default)
+        port_gcm_contract_default_context(context);
+
+    ppu_gcm_pump();
+    auto saved_caller = g_ps3_guest_caller;
+    g_ps3_guest_caller = count_flip;
+    flip_callbacks = 0;
+    vm_write32(context + 0x20, 0x1234);
+    cellGcmSetFlipHandler((void*)(uintptr_t)(context + 0x20));
+
+    const auto command_context = (void*)(uintptr_t)context;
+    unsigned requests = cellGcm_flip_request_count();
+    uint32_t cursor = 0;
+    int32_t slots[7] = {};
+    bool packets = true, indices = true, capacity = true, presentation = true;
+    // Seven usable entries in an eight-entry ring. Two batches cross index 0.
+    for (unsigned batch = 0; batch < 2; ++batch) {
+        for (unsigned i = 0; i < 7; ++i) {
+            const uint32_t id = (i + 2) % 3;
+            slots[i] = cellGcmSetPrepareFlip(command_context, id);
+            const bool valid = slots[i] >= 0 && slots[i] < 8;
+            indices &= valid && cellGcmGetDisplayBufferByFlipIndex(slots[i]) == (int32_t)id;
+            for (unsigned j = 0; j < i; ++j)
+                indices &= slots[i] != slots[j];
+            packets &= vm_read32(fifo + cursor) == 0x0004E944 &&
+                       vm_read32(fifo + cursor + 4) == id;
+            cursor += 8;
+            packets &= vm_read32(context + 8) == fifo + cursor;
+        }
+        capacity &= cellGcmSetPrepareFlip(command_context, 1) < 0 &&
+                    vm_read32(context + 8) == fifo + cursor;
+        presentation &= cellGcmSetFlipImmediate(slots[0]) < 0;
+        packets &= vm_read32(control) == (active_default ? cursor : cursor - 56);
+        vm_write32(control, cursor);
+        cellGcm_rsx_process_fifo();
+        ppu_gcm_pump();
+        presentation &= port_gcm_contract_get() == cursor &&
+                        cellGcm_flip_request_count() == requests;
+        // Select a later queued buffer. The driver retires the preceding entries.
+        for (unsigned i : {2u, 6u}) {
+            unsigned callbacks = flip_callbacks;
+            presentation &= cellGcmSetFlipImmediate(slots[i]) == 0;
+            presentation &= cellGcmGetCurrentDisplayBufferId() == (i + 2) % 3;
+            presentation &= cellGcm_flip_request_count() == ++requests;
+            ppu_gcm_pump();
+            presentation &= flip_callbacks == callbacks;
+            cellGcmTickFlip();
+            ppu_gcm_pump();
+            ppu_gcm_pump();
+            presentation &= flip_callbacks == callbacks + 1;
+            for (unsigned old = 0; old <= i; ++old) {
+                indices &= cellGcmGetDisplayBufferByFlipIndex(slots[old]) == -1;
+                presentation &= cellGcmSetFlipImmediate(slots[old]) < 0;
+            }
+        }
+    }
+
+    cellGcmSetFlipHandler(nullptr);
+    g_ps3_guest_caller = saved_caller;
+    const bool ok = packets && indices && capacity && presentation;
+    fprintf(stderr, "[compat-check] display queue default=%d packets=%d indices=%d "
+            "capacity=%d presentation=%d callbacks=%u %s\n", active_default, packets,
+            indices, capacity, presentation, flip_callbacks, ok ? "PASS" : "FAIL");
+    return ok;
+}
+
 extern "C" int port_check_prepare_flip()
 {
-    bool ok=true;
-    for(bool active_default : {false,true}) {
-    constexpr uint32_t ea=0x60000000,context=ea+0x80000;
-    port_gcm_contract_begin(ea);
-    if(cellGcmSetDisplayBuffer(2,0,5120,1280,720)) return 2;
-    uint32_t control=ppu_hle_inject_base+0x2000;
-    vm_write32(context,ea);vm_write32(context+4,ea+0x10000);
-    vm_write32(context+8,ea);vm_write32(context+12,0);
-    vm_write32(ea,0);vm_write32(ea+4,0);
-    auto saved_caller=g_ps3_guest_caller;
-    ppu_gcm_pump();
-    flip_callbacks=0;
-    g_ps3_guest_caller=count_flip;
-    vm_write32(context+0x20,0x1234);
-    cellGcmSetFlipHandler((void*)(uintptr_t)(context+0x20));
-    if(active_default) port_gcm_contract_default_context(context);
-    unsigned before=cellGcm_flip_request_count();
-    int32_t result=cellGcmSetPrepareFlip((void*)(uintptr_t)context,2);
-    bool deferred=result==2 && cellGcm_flip_request_count()==before && port_gcm_contract_get()==0;
-    bool queued=vm_read32(ea)==0x0004E924 && vm_read32(ea+4)==2 && vm_read32(context+8)==ea+8;
-    bool published=vm_read32(control)==(active_default?8u:0u);
-    vm_write32(control,8);
-    cellGcm_rsx_process_fifo();
-    bool executed=port_gcm_contract_get()==8 && cellGcm_flip_request_count()==before+1;
-    ppu_gcm_pump();
-    bool no_early_callback=flip_callbacks==0;
-    cellGcmTickFlip();
-    bool deferred_completion=flip_callbacks==0;
-    ppu_gcm_pump();
-    bool completed_once=flip_callbacks==1;
-    ppu_gcm_pump();
-    completed_once=completed_once&&flip_callbacks==1;
-    cellGcmSetFlipHandler(nullptr);
-    g_ps3_guest_caller=saved_caller;
-    bool pass=deferred&&queued&&published&&executed&&no_early_callback&&deferred_completion&&completed_once;
-    fprintf(stderr,"[compat-check] prepare flip default=%d deferred=%d queued=%d published=%d consumed-once=%d %s\n",
-        active_default,deferred,queued,published,executed,pass?"PASS":"FAIL");
-    fprintf(stderr,"[compat-check] flip callback FIFO-quiet=%d completion-deferred=%d delivered-once=%d\n",
-        no_early_callback,deferred_completion,completed_once);
-    ok=ok&&pass;
-    }
-    return ok?0:1;
+    const bool custom = check_display_queue(false);
+    const bool active = check_display_queue(true);
+    return custom && active ? 0 : 1;
 }
 
 extern "C" int port_check_fifo_flip_boundary()

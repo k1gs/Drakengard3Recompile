@@ -1,11 +1,11 @@
 /* Actual FIFO DMA registers -> record snapshots -> RT upload/cache -> texture
  * resolver -> shader sampling. LOCAL and MAIN share raw offsets deliberately. */
+int port_check_display_buffers_gpu(ID3D12CommandAllocator*,ID3D12GraphicsCommandList*,ID3D12CommandQueue*,ID3D12Fence*,HANDLE);
 int port_check_color_surfaces_gpu(void)
 {
     if(s_d3d.device)return 2;
     extern uint8_t* vm_base;
     extern void port_gcm_contract_begin(u32);
-    extern int cellGcmSetDisplayBuffer(u8,u32,u32,u32,u32);
     ID3D12Device* device=NULL;IDXGIFactory4* factory=NULL;IDXGIAdapter* warp=NULL;
     ID3D12CommandQueue* queue=NULL;ID3D12CommandAllocator* allocator=NULL;
     ID3D12GraphicsCommandList* list=NULL;ID3D12Fence* fence=NULL;
@@ -13,7 +13,7 @@ int port_check_color_surfaces_gpu(void)
     ID3D12DescriptorHeap* output_heap=NULL;ID3D12Resource* output=NULL;ID3D12Resource* readback=NULL;
     ID3D12RootSignature* root=NULL;ID3D12PipelineState* pso=NULL;
     ID3DBlob* vs=NULL;ID3DBlob* ps=NULL;ID3DBlob* blob=NULL;ID3DBlob* error=NULL;
-    HANDLE event=NULL;int software=0,ok=0,snapshots=0,routing=0;HRESULT hr=S_OK;
+    HANDLE event=NULL;int software=0,ok=0,snapshots=0,routing=0,display_buffers=1;HRESULT hr=S_OK;
     unsigned pixels=0,samples=0,remapped=0;int slots[4]={-1,-1,-1,-1};
     enum { REMAPS=32, OUTPUTS=4+REMAPS*2 };
     u32 controls[REMAPS];u8 expected_remap[REMAPS][4];unsigned cases=0;
@@ -87,8 +87,10 @@ int port_check_color_surfaces_gpu(void)
     if(cellGcmSetDisplayBuffer(0,0x10000,80,16,16))goto cleanup;
     s_d3d.current_rsx_state=&st;u32 w=0,h=0,mrt[3];
     st.color_target=1;u32 local=current_rt_off(&w,&h,mrt);
+    int local_display=port_current_rt_is_display();
     rsx_process_method(&st,0x194,0xFEED0001u);u32 main=current_rt_off(&w,&h,mrt);
-    routing=local==0 && main==0x10000;
+    int main_display=port_current_rt_is_display();
+    routing=local==0x10000 && main==0x10000 && local_display && !main_display;
     /* Later DMA/pitch changes cannot change the already recorded sources. */
     for(unsigned i=0;i<4;i++){rsx_process_method(&st,methods[i],0xFEED0001u);st.surface_color_pitch[i]=256;}
     if(!snapshots || !routing)goto cleanup;
@@ -218,7 +220,9 @@ int port_check_color_surfaces_gpu(void)
         else fprintf(stderr,"[compat-check] RT remap c1=%04X feedback=%u got=%u,%u,%u,%u expected=%u,%u,%u,%u\n",
             controls[c],feedback,p[0],p[1],p[2],p[3],expected_remap[c][0],expected_remap[c][1],expected_remap[c][2],expected_remap[c][3]);
     }
-    readback->lpVtbl->Unmap(readback,0,NULL);ok=pixels==1024 && samples==4 && remapped==REMAPS*2 && snapshots && routing;
+    readback->lpVtbl->Unmap(readback,0,NULL);
+    display_buffers=port_check_display_buffers_gpu(allocator,list,queue,fence,event);
+    ok=pixels==1024 && samples==4 && remapped==REMAPS*2 && snapshots && routing && display_buffers==0;
 cleanup:
     fprintf(stderr,"[compat-check] color surfaces GPU device=%s source-pixels=%u/1024 sampled=%u/4 remapped=%u/64 snapshots=%d local-display-routing=%d %s hr=%08lX\n",
         software?"WARP":"hardware",pixels,samples,remapped,snapshots,routing,ok?"PASS":"FAIL",(unsigned long)hr);

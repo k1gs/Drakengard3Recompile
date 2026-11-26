@@ -127,7 +127,7 @@ static unsigned port_is_movie_draws(const D3D12DrawRecord* draws,u32 count,u32 w
     }
     unsigned video=0;
     if(r) {
-        video=r->is_vp && !r->is_clear && !r->rt_off && r->vertex_count==6;
+        video=r->is_vp && !r->is_clear && (!r->rt_off || r->rt_display) && r->vertex_count==6;
         for(unsigned u=0;video && u<3;u++) {
             unsigned divisor=u?2:1;
             video=r->tex[u].set && r->tex[u].fmt==0xA1 &&
@@ -692,6 +692,44 @@ int port_check_vertex_constants(void)
 
 '''
     text=text.replace(anchor,fixture+anchor)
+    # Registered guest display buffers are distinct render targets.  Mapping
+    # every registered offset to raw 0 sent all flip ids into one swapchain;
+    # keep each surface in the existing off-RT pool and composite only the
+    # buffer selected by the completed flip.
+    marker='/* Which offscreen surface (if any) does the current RSX state render to?'
+    display_helper=r'''static int port_current_rt_is_display(void)
+{
+    extern int cellGcmOffsetIsDisplay(u32 offset);
+    const rsx_state* st=s_d3d.current_rsx_state;
+    if(!st) return 0;
+    const unsigned sel=st->color_target==2?1:0;
+    return port_color_dma[sel]==0xFEED0000u &&
+           cellGcmOffsetIsDisplay(st->surface_color_offset[sel]);
+}
+
+static int off_rt_find(u32 address);
+static u32 port_color_address(u32 dma,u32 offset);
+static int port_current_display_ready(void)
+{
+    const u32 id = cellGcmGetCurrentDisplayBufferId();
+    const CellGcmDisplayInfo* display = cellGcmGetDisplayInfo(id);
+    if (!display || !display->pitch) return 0;
+    return off_rt_find(port_color_address(0xFEED0000u,display->offset)) >= 0;
+}
+
+'''
+    if text.count(marker)!=1: raise ValueError('Display RT marker changed')
+    text=text.replace(marker,display_helper+marker)
+    replace('''    u32 want = s_composite_src;
+    s_composite_src = 0;''', '''    u32 want = s_composite_src;
+    int have_want = want != 0;
+    s_composite_src = 0;
+    if (!want && s_present_this_frame) {
+        const u32 id = cellGcmGetCurrentDisplayBufferId();
+        const CellGcmDisplayInfo* display = cellGcmGetDisplayInfo(id);
+        if (display && display->pitch) { want = display->offset; have_want = 1; }
+    }''')
+    replace('    if (!want) return;', '    if (!have_want) return;')
     replace('vm_base + off, 4096','vm_base + off, PORT_FP_PROGRAM_BYTES',3)
     replace('port_collect_guest_fp(vm_base + foff, 4096,',
             'port_collect_guest_fp(vm_base + foff, PORT_FP_PROGRAM_BYTES,')
@@ -788,6 +826,14 @@ int port_check_renderer_options(void)
     text=prepare_rt_lifetime(text)
     text=prepare_clear(text)
     text=prepare_color_surfaces(text)
+    replace('if (_bs && st->color_target < 0x13 &&',
+            'if (_bs && !cellGcmOffsetIsDisplay(raw) && st->color_target < 0x13 &&')
+    text, _display_rt_assignments = re.subn(
+        r'(?m)^(\s*)dr->rt_off = current_rt_off\(&dr->rt_w, &dr->rt_h, dr->rt_mrt\);$',
+        r'\1dr->rt_off = current_rt_off(&dr->rt_w, &dr->rt_h, dr->rt_mrt);\n\1dr->rt_display = port_current_rt_is_display();',
+        text)
+    if _display_rt_assignments != 3:
+        raise ValueError('Pinned display RT assignments changed')
     text=prepare_rt_layouts(text)
     replace('    int   is_clear;', '    u64   zpass_epoch;\n    int   is_clear;')
     zpass=(Path(__file__).resolve().parents[1]/'port/renderer_zpass.inc').read_text(encoding='utf-8')
@@ -923,6 +969,7 @@ static int off_rt_get(''')
     replace('if (m && SUCCEEDED(iq->lpVtbl->GetMessage(iq, mi, m, &len))) {',
             'if (m && SUCCEEDED(iq->lpVtbl->GetMessage(iq, mi, m, &len)) &&\n'
             '                    (m->Severity<=D3D12_MESSAGE_SEVERITY_ERROR || _printed<80)) {')
+    text = '#include "cellGcmSys_compat.h"\n' + text
     text=resolve_local_includes(text, source, sdk)
     target=output/'rsx_d3d12_backend_compat.c'
     if not target.exists() or target.read_text(encoding='utf-8')!=text:

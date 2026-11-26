@@ -31,6 +31,7 @@ extern "C"
     int port_check_color_surfaces_gpu();
     int port_check_rt_layouts_gpu();
     int port_check_nv0039();
+    int port_check_gcm_address_space();
     int port_check_vblank_counter();
     int port_check_texture_cache();
     int port_check_renderer_options();
@@ -50,6 +51,7 @@ extern "C"
     int port_check_gcm_park();
     int port_check_fifo_flip_boundary();
     int port_check_fifo_engine_isolation();
+    int port_check_fifo_semaphore();
     int port_check_prepare_flip();
     int port_check_spu_interpreter_halt();
     int port_check_spu_task_null_branch();
@@ -67,6 +69,7 @@ struct Check
 };
 const Check checks[] = {
     {"--check-nv0039", port_check_nv0039},
+    {"--check-gcm-address-space", port_check_gcm_address_space},
     {"--check-rt-layouts-gpu", port_check_rt_layouts_gpu},
     {"--check-color-surfaces-gpu", port_check_color_surfaces_gpu},
     {"--check-rt-lifetime-gpu", port_check_rt_lifetime_gpu},
@@ -113,6 +116,7 @@ const Check checks[] = {
     {"--check-gcm-park", port_check_gcm_park},
     {"--check-fifo-flip-boundary", port_check_fifo_flip_boundary},
     {"--check-fifo-engine-isolation", port_check_fifo_engine_isolation},
+    {"--check-fifo-semaphore", port_check_fifo_semaphore},
     {"--check-prepare-flip", port_check_prepare_flip},
     {"--check-spu-interpreter-halt", port_check_spu_interpreter_halt},
     {"--check-spu-task-null-branch", port_check_spu_task_null_branch},

@@ -17,7 +17,7 @@ static int port_batch_has_color(void)
 {
     for(u32 i=0;i<s_d3d.draw_count;i++) {
         const D3D12DrawRecord* r=&s_d3d.draws[i];
-        if(!r->rt_off && ((r->is_clear && (r->clear_flags&0xF0u)) ||
+        if((r->rt_display || !r->rt_off) && ((r->is_clear && (r->clear_flags&0xF0u)) ||
             (!r->is_clear && (!r->is_vp || r->cmask)))) return 1;
     }
     return 0;
@@ -27,7 +27,8 @@ static void render_frame(void)''')
          '    if(port_batch_has_color()) s_port_color_pending=1;\n'
          '    port_note_movie_draws();\n    double _rf0')
     once('    if (s_composite_src) has_display = 1;',
-         '    if (s_composite_src || s_port_color_pending || port_batch_has_color()) has_display = 1;')
+         '    if (s_composite_src || s_port_color_pending || port_batch_has_color() ||\n'
+         '        (s_d3d.draw_count == 0 && port_current_display_ready())) has_display = 1;')
     for name in ('flip_has_display','has_display'):
         once('    for (u32 _i = 0; _i < s_d3d.draw_count && _i < MAX_DRAWS; _i++)\n'
              '        if (!s_d3d.draws[_i].is_clear && s_d3d.draws[_i].rt_off == 0) {\n'
@@ -86,7 +87,7 @@ static void render_frame(void)''')
     D3D12DrawRecord* r=&s_d3d.draws[s_d3d.draw_count++];
     memset(r,0,sizeof(*r));
     r->is_vp=1;r->is_clear=1;r->tex_slot=-1;
-    r->rt_off=rt;r->rt_w=w;r->rt_h=h;memcpy(r->rt_mrt,mrt,sizeof(mrt));
+    r->rt_off=rt;r->rt_display=port_current_rt_is_display();r->rt_w=w;r->rt_h=h;memcpy(r->rt_mrt,mrt,sizeof(mrt));
     r->rt_fmt=s_d3d.current_rsx_state?s_d3d.current_rsx_state->surface_format:0;
     r->clear_flags=flags;r->clear_depth=depth;r->clear_stencil=stencil;
     r->cc[0]=((color>>16)&255)/255.0f;r->cc[1]=((color>>8)&255)/255.0f;

@@ -34,8 +34,71 @@ def main():
     prepare_renderer(a.sdk, a.out.parent)
     prepare_depth_commands(a.sdk, a.out.parent)
     prepare_input(a.sdk, a.out.parent)
+    rsx = a.sdk / 'libs/video/sys_rsx.c'
+    driver = rsx.read_text(encoding='utf-8')
+    iomap = '    cellGcm_syscall_iomap(ea, io, size);'
+    if driver.count(iomap) != 1:
+        raise ValueError('Pinned RSX context IO mapping changed')
+    driver = driver.replace(iomap, '''    if (port_invalid_user_mapping(ea, size))
+        return (int64_t)(int32_t)CELL_EINVAL;
+''' + iomap)
+    driver = '#include "runtime/service_memory.h"\n' + resolve_local_includes(driver, rsx, a.sdk)
+    driver += '''
+void port_rsx_display_queued(u32 head, u32 buffer)
+{
+    if (!s_isr_qid) return;
+    const u32 base = RSX_DRIVER_INFO_EA + RSX_DI_HEAD_BASE + head * RSX_DI_HEAD_STRIDE;
+    vm_write32(base + RSX_DI_HEAD_LASTQUEUED, buffer);
+    const u32 flags = vm_read32(base + RSX_DI_HEAD_FLIPFLAGS);
+    vm_write32(base + RSX_DI_HEAD_FLIPFLAGS, flags | 0x40000000u | (1u << buffer));
+    rsx_send_event(SYS_RSX_EVENT_QUEUE_BASE << head);
+}
+'''
+    write_if_changed(a.out.parent / 'sys_rsx_compat.c', driver)
     loader=a.sdk/'runtime/ppu/ppu_loader.cpp'
     loader_text=loader.read_text(encoding='utf-8')
+    # These fallback mmapper calls return guest-owned memory. Reject a span
+    # crossing into the driver's window before changing the allocator cursor.
+    for cursor, begin, end, candidate in (
+            ('s_next_va', '        s_next_va = (s_next_va + align - 1)',
+             '        s_next_va += (size + 0xFFFFFu) & ~0xFFFFFu;',
+             '(s_next_va + align - 1) & ~((uint64_t)align - 1)'),
+            ('s_map_next', '        uint32_t va = s_map_next;',
+             '        s_map_next = (s_map_next + size + 0xFFFFFu) & ~0xFFFFFu;',
+             's_map_next ? s_map_next : (start ? start : 0x11000000u)')):
+        if loader_text.count(begin) != 1 or loader_text.count(end) != 1:
+            raise ValueError('Pinned guest mapper cursor changed: ' + cursor)
+        first = loader_text.index(begin)
+        last = loader_text.index(end, first) + len(end)
+        loader_text = loader_text[:first] + f'''        const uint64_t candidate = {candidate};
+        const uint64_t next = (candidate + size + 0xFFFFFu) & ~UINT64_C(0xFFFFF);
+        if (port_invalid_user_mapping(candidate, next - candidate)) {{
+            ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)CELL_ENOMEM;
+            return;
+        }}
+        const uint32_t va = (uint32_t)candidate;
+        {cursor} = next;''' + loader_text[last:]
+        loader_text = loader_text.replace('static uint32_t ' + cursor + ' =',
+                                          'static uint64_t ' + cursor + ' =', 1)
+    loader_text = loader_text.replace('        if (!s_map_next) s_map_next = start ? start : 0x11000000u;\n', '')
+    reserve = '        static uint64_t s_next_va = 0x11000000u;'
+    if loader_text.count(reserve) != 1:
+        raise ValueError('Pinned guest address reservation changed')
+    loader_text = loader_text.replace(reserve, '''        if (ctx->gpr[3] > UINT32_MAX || ctx->gpr[5] > UINT32_MAX) {
+            ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)CELL_ENOMEM;
+            return;
+        }
+''' + reserve)
+    loader_text = '#include "runtime/service_memory.h"\n#include "include/ps3emu/error_codes.h"\n' + loader_text
+    # The PPU may poll REF entirely in lifted code. Deliver already-pending
+    # display interrupts on the polling guest thread, also when ref pacing is off.
+    poll = 'if ((uint32_t)a == (VM_HLE_INJECT_BASE + 0x2008u)) { static int _rp=-1;'
+    if loader_text.count(poll) != 1:
+        raise ValueError('Pinned RSX reference poll changed')
+    loader_text = loader_text.replace(poll, '''if ((uint32_t)a == (VM_HLE_INJECT_BASE + 0x2008u)) {
+        if (g_active_ctx) ppu_gcm_pump();
+        static int _rp=-1;''')
+    loader_text = 'extern "C" void ppu_gcm_pump(void);\n' + loader_text
     anchor='        ppu_context* c = g_resv_ctxs[i];\n        if (!c) continue;\n        fprintf(stderr, "[WATCHDOG]'
     if loader_text.count(anchor)!=1:
         raise ValueError('PPU context sample anchor changed')

@@ -125,8 +125,12 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_spu_tasks.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_spu_dispatch.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_gcm.py"
+    "${PS3RECOMP_DIR}/libs/video/sys_rsx.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/gcm_fifo_recycle.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gcm_display_queue.inc"
+    "${PS3RECOMP_DIR}/libs/video/cellGcmSys.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_renderer.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_frame_boundaries.py"
     "${PS3RECOMP_DIR}/libs/video/rsx_fp_decompiler.c"
     "${PS3RECOMP_DIR}/libs/video/rsx_vp_decompiler.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_texcoord_varyings.py"
@@ -161,6 +165,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_color_surfaces.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/renderer_color_surfaces.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/checks/color_surfaces_gpu.inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/display_buffers_gpu.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_rt_layouts.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/renderer_rt_layouts.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/renderer_depth_alias.inc"
@@ -263,6 +268,7 @@ set(PORT_CHECK_SOURCES
     checks/spu_image_cache_checks.cpp
     checks/spu_task_checks.cpp
     checks/gcm_checks.cpp
+    checks/gcm_address_space.cpp
     checks/msdsp_checks.c
     checks/audio_decoder_checks.c
 )
@@ -274,6 +280,7 @@ set(PORT_PREPARED_SOURCES
     "${CMAKE_CURRENT_BINARY_DIR}/spu_channels_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/spu_interp_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/sys_memory_compat.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/sys_rsx_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/sys_event_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/cellSpurs_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/cellGcmSys_compat.c"

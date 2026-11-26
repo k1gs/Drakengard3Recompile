@@ -1,10 +1,12 @@
 // Windows demand paging for the flat guest address space.
 #include "host.h"
+#include "service_memory.h"
 
 extern "C"
 {
     uint8_t *vm_base = nullptr;
     extern uint32_t ppu_vm_size;
+    extern uint32_t ppu_hle_inject_base;
 }
 
 static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS *ep)
@@ -29,5 +31,16 @@ bool port_allocate_guest_vm(void)
     vm_base = (uint8_t *)VirtualAlloc(NULL, kGuestVmSize, MEM_RESERVE, PAGE_READWRITE);
     ppu_vm_size = 0; /* the whole space is backed; no OOB guard needed */
 
-    return vm_base != nullptr;
+    if (!vm_base)
+        return false;
+
+    // Drivers can be the first writers, including DMA from a worker thread.
+    if (!VirtualAlloc(vm_base + PORT_SERVICE_BASE, PORT_SERVICE_SIZE, MEM_COMMIT, PAGE_READWRITE))
+    {
+        VirtualFree(vm_base, 0, MEM_RELEASE);
+        vm_base = nullptr;
+        return false;
+    }
+    ppu_hle_inject_base = PORT_SERVICE_BASE;
+    return true;
 }

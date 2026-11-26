@@ -318,7 +318,7 @@ static int off_rt_get(u32 off,u32 address,u32 source_pitch,u32 w,u32 h,u32 rsx_f
 }
 static void port_rt_targets(const D3D12DrawRecord* dr,int slots[4])
 {
-    slots[0]=dr->rt_off?off_rt_get(dr->rt_off,dr->color[0].address,dr->color[0].pitch,dr->rt_w,dr->rt_h,dr->rt_fmt):-1;
+    slots[0]=(dr->rt_off || dr->rt_display)?off_rt_get(dr->rt_off,dr->color[0].address,dr->color[0].pitch,dr->rt_w,dr->rt_h,dr->rt_fmt):-1;
     for(unsigned i=1;i<4;i++) {
         slots[i]=dr->rt_mrt[i-1]?off_rt_get(dr->rt_mrt[i-1],dr->color[i].address,dr->color[i].pitch,dr->rt_w,dr->rt_h,dr->rt_fmt):-1;
         if(slots[i]>=0)for(unsigned j=0;j<i;j++)if(slots[j]==slots[i] && dr->color[j].pitch!=dr->color[i].pitch) {

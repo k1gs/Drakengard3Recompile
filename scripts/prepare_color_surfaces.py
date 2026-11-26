@@ -14,7 +14,7 @@ def prepare(text):
         text = text.replace(old, new)
 
     root = Path(__file__).resolve().parents[1]
-    once('    u32 rt_fmt;', '    struct { u32 address, pitch; } color[4];\n    u32 rt_fmt;')
+    once('    u32 rt_fmt;', '    struct { u32 address, pitch; } color[4];\n    u8 rt_display;\n    u32 rt_fmt;')
     once('    u32                   dxgi;',
          '    u32                   address, source_pitch;\n    u32                   dxgi;')
     helper = (root / 'port/renderer_color_surfaces.inc').read_text(encoding='utf-8')
@@ -29,8 +29,7 @@ def prepare(text):
     text = text[:start] + '''/* Display offsets name local-memory buffers only. Raw offsets remain for
  * display routing/diagnostics; resource lookup uses captured effective EAs. */
 ''' + text[end:]
-    once('    if (cellGcmOffsetIsDisplay(raw)) return 0;',
-         '    if (port_color_dma[sel]==0xFEED0000u && cellGcmOffsetIsDisplay(raw)) return 0;')
+    once('    if (cellGcmOffsetIsDisplay(raw)) return 0;', '')
     start = text.index('static int off_rt_find(u32 off)')
     end = text.index('\n}\n', start) + 3
     text = text[:start] + '''static int off_rt_find(u32 address)
@@ -74,6 +73,7 @@ def prepare(text):
          '                        s_d3d.off_rt[i].address,s_d3d.off_rt[i].source_pitch,\n'
          '                        s_d3d.off_rt[i].w, s_d3d.off_rt[i].h, s_d3d.off_rt[i].dxgi)')
     text += '\n' + (root / 'port/checks/color_surfaces_gpu.inc').read_text(encoding='utf-8')
+    text += '\n' + (root / 'port/checks/display_buffers_gpu.inc').read_text(encoding='utf-8')
     return text
 
 

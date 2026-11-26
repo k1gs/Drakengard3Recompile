@@ -1,12 +1,153 @@
 """Preserve pending GPU commands and expose their real IO mapping for diagnosis."""
 from pathlib import Path
 from prepare_nv0039 import prepare as prepare_nv0039
-from compat_source import resolve_local_includes
+from compat_source import resolve_local_includes, write_if_changed
+
+
+def prepare_display_queue(text, source, sdk, output):
+    def replace(old, new):
+        nonlocal text
+        if text.count(old) != 1:
+            raise ValueError('Pinned display queue anchor changed: ' + old[:80])
+        text = text.replace(old, new)
+
+    # The guest export returns a signed buffer ID, including -1 for a stale
+    # index. The upstream declaration returns a host pointer to display info.
+    header = source.with_suffix('.h')
+    decl = 'CellGcmDisplayInfo* cellGcmGetDisplayBufferByFlipIndex(u32 index)'
+    contents = header.read_text(encoding='utf-8')
+    if contents.count(decl) != 1:
+        raise ValueError('Pinned flip-index return type changed')
+    contents = contents.replace(decl, 's32 cellGcmGetDisplayBufferByFlipIndex(u32 index)')
+    write_if_changed(output / 'cellGcmSys_compat.h', resolve_local_includes(contents, header, sdk))
+    replace('#include "libs/video/cellGcmSys.h"', '#include "cellGcmSys_compat.h"')
+
+    for signature in (decl, 's32 cellGcmSetFlipImmediate(u32 bufferId)'):
+        begin = text.index(signature + '\n{')
+        end = text.index('\n}\n', begin) + len('\n}\n')
+        text = text[:begin] + text[end:]
+
+    anchor = 'static u32 s_sema_resume_arg;'
+    replace(anchor, '#include "gcm_display_queue.inc"\n' + anchor)
+    replace('static void port_sema_reset(void)\n{',
+            'static void port_sema_reset(void)\n{\n    port_display_queue_reset();')
+    replace('void port_gcm_contract_begin(u32 ea) {',
+            'void port_gcm_contract_begin(u32 ea) {\n    port_display_queue_reset();')
+    # E940/E944 queue scanout for a head. E920/E924 actually flip it.
+    anchor = '                } else if (mfull == 0xE920u || mfull == 0xE924u) {'
+    replace(anchor, '''                } else if (mfull == 0xE940u || mfull == 0xE944u) {
+                    const u32 buffer = vm_read32(dea);
+                    if (buffer < CELL_GCM_MAX_DISPLAY_BUFFER_NUM) {
+                        extern void port_rsx_display_queued(u32, u32);
+                        port_renderer_submit_pending();
+                        if (mfull == 0xE944u) port_display_packet_ready(buffer);
+                        port_rsx_display_queued((mfull - 0xE940u) / 4, buffer);
+                    }
+''' + anchor)
+    return text
+
+
+def prepare_semaphore_wait(text):
+    """Dispatch PFIFO semaphore methods in order, including packed packets."""
+    start = text.index('            /* NV406E semaphore: OFFSET')
+    end = text.index('            int port_flip_boundary = 0;', start)
+    if 'getenv("GCM_SEMA_ACQUIRE")' not in text[start:end]:
+        raise ValueError('Pinned optional FIFO semaphore wait changed')
+    text = text[:start] + text[end:]
+
+    def replace(old, new):
+        nonlocal text
+        if text.count(old) != 1:
+            raise ValueError('Pinned FIFO semaphore anchor changed: ' + old[:70])
+        text = text.replace(old, new)
+
+    replace('static u32 s_sema_offset = 0;', '''/* GET stays at the packet header while an argument is waiting. The FIFO
+ * owner retains its method index so earlier arguments run exactly once. */
+static u32 s_sema_resume_arg;
+static int s_sema_waiting;
+static u32 s_sema_offset = 0;''')
+    # Recycling command storage does not reset the channel's registers.
+    replace('static void port_fifo_wrap_reset(void);',
+            'static void port_fifo_wrap_reset(void);\nstatic void port_sema_reset(void);')
+    anchor = 'static void port_fifo_wrap_reset(void) { memset(&port_fifo_wrap,0,sizeof(port_fifo_wrap)); }'
+    replace(anchor, anchor + '''
+static void port_sema_reset(void)
+{
+    s_sema_offset = 0;
+    s_sema_resume_arg = 0;
+    s_sema_waiting = 0;
+}''')
+    init = '    port_fifo_wrap_reset();\n    port_gcm_report_reset();'
+    if text.count(init) != 2:
+        raise ValueError('Pinned GCM init and shutdown anchors changed')
+    text = text.replace(init, '    port_sema_reset();\n' + init)
+    replace('if (s_fifo_getoff == last && s_fifo_getoff != put)',
+            'if (!s_sema_waiting && s_fifo_getoff == last && s_fifo_getoff != put)')
+    # Libgcm installs its handler through the HLE API. A low-level RSX
+    # context instead has a driver event queue and runs its own interrupt handler.
+    replace('                    rsx_raise_user_cmd(vm_read32(dea));', '''
+                    const u32 cause = vm_read32(dea);
+                    if (s_user_handler_opd || !s_gcm_syscall_mode)
+                        cellGcmQueueUserCommand(cause);
+                    else
+                        rsx_raise_user_cmd(cause);'''.lstrip('\n'))
+    for reset in ('    s_fifo_getoff  = get;', '    s_fifo_getoff=0; s_fifo_calloff=0;'):
+        replace(reset, reset + '\n    s_sema_resume_arg = 0;\n    s_sema_waiting = 0;')
+    replace('            int port_flip_boundary = 0;\n            for (u32 i = 0; i < count; i++) {',
+            '''            int port_flip_boundary = 0;
+            for (u32 i = s_sema_resume_arg; i < count; i++) {''')
+    insert = '                /* GCM_SET_USER_COMMAND is method 0xEB00'
+    replace(insert, '''                if (subch == 0 && m == 0x64u) {
+                    s_sema_offset = vm_read32(dea);
+                    continue;
+                }
+                if (subch == 0 && (m == 0x68u || m == 0x6Cu)) {
+                    const u32 address = GCM_LABEL_GUEST_BASE + (s_sema_offset & 0xFFFFu);
+                    const u32 value = vm_read32(dea);
+                    if (m == 0x6Cu) {
+                        port_renderer_submit_pending();
+                        vm_write32(address, value);
+                    } else {
+                        const u32 observed = vm_read32(address);
+                        if (observed != value) {
+                            static unsigned waits_logged;
+                            if (!s_sema_waiting && waits_logged < 12) {
+                                ++waits_logged;
+                                fprintf(stderr, "[fifo-semaphore] get=%08X arg=%u label=%08X "
+                                        "observed=%08X expected=%08X\\n",
+                                        s_fifo_getoff, i, address, observed, value);
+                            }
+                            s_sema_resume_arg = i;
+                            s_sema_waiting = 1;
+                            break;
+                        }
+                        s_sema_waiting = 0;
+                    }
+                    continue;
+                }
+''' + insert)
+    tail = '            s_fifo_getoff += 4 + count * 4;\n            if (port_flip_boundary)'
+    replace(tail, '''            if (s_sema_waiting) {
+                why = "semaphore-acquire";
+                break;
+            }
+            s_sema_resume_arg = 0;
+''' + tail)
+    return text
 
 
 def prepare(sdk, output):
     source=sdk/'libs/video/cellGcmSys.c'
     text=source.read_text(encoding='utf-8')
+    for signature in ('s32 cellGcmMapMainMemory(u32 ea, u32 size, u32* offset)',
+                      's32 cellGcmMapEaIoAddress(u32 ea, u32 io, u32 size)'):
+        anchor = signature + '\n{'
+        if text.count(anchor) != 1:
+            raise ValueError('Pinned GCM user mapping changed: ' + signature)
+        text = text.replace(anchor, anchor + '''
+    if (port_invalid_user_mapping(ea, size))
+        return CELL_GCM_ERROR_INVALID_VALUE;''')
+    text = '#include "runtime/service_memory.h"\n' + text
     old='    /* Approximate: increment each time queried (games use this for timing) */\n    return s_vblank_count++;'
     if text.count(old)!=1: raise ValueError('Pinned vblank getter changed')
     text=text.replace(old,'    /* Display ticks advance the counter; polling only observes it. */\n    return s_vblank_count;')
@@ -59,9 +200,11 @@ int port_check_vblank_counter(void)
     u32 io=gcm_ea2io(current);
     if(current>end || end-current<8 || io==0xFFFFFFFFu)
         return CELL_GCM_ERROR_FAILURE;
-    /* Preparation queues a command. Display ownership, callbacks and the
-     * frame counter change only when the FIFO owner consumes this packet. */
-    vm_write32(current,0x0004E924u);
+    /* libgcm queues head 1 here. SetFlipImmediate consumes the returned
+     * queue index later, after the FIFO has finished this buffer. */
+    s32 slot = port_prepare_display_slot(bufferId);
+    if (slot < 0) return slot;
+    vm_write32(current,0x0004E944u);
     vm_write32(current+4,bufferId);
     vm_write32(context+8,current+8);
     u32 active_default=s_gcm_ctx_out_ea ? vm_read32(s_gcm_ctx_out_ea) : s_gcm_context_ea;
@@ -70,7 +213,7 @@ int port_check_vblank_counter(void)
           fprintf(stderr,"[prepare-flip] ctx=%08X active=%08X queued=%08X put=%08X publish=%d\n",
                   context,active_default,io,vm_read32(GCM_CONTROL_GUEST_ADDR),context==active_default); }
     if(context==active_default) vm_write32(GCM_CONTROL_GUEST_ADDR,io+8);
-    return (s32)bufferId;
+    return slot;
 }
 '''+text[end:]
     text='void port_renderer_submit_pending(void);\nstatic const void* s_port_gcm_render_state;\n'+text
@@ -277,6 +420,8 @@ static void port_fifo_wrap_reset(void) { memset(&port_fifo_wrap,0,sizeof(port_fi
     text=text.replace('    port_nv0039_reset();\n    memset(s_report_data,',
                       '    port_fifo_wrap_reset();\n    port_gcm_report_reset();\n    port_nv0039_reset();\n    memset(s_report_data,')
     text='static void port_fifo_wrap_reset(void);\nstatic void port_gcm_report_reset(void);\n'+text
+    text = prepare_semaphore_wait(text)
+    text = prepare_display_queue(text, source, sdk, output)
     target=output/'cellGcmSys_compat.c'
     if not target.exists() or target.read_text(encoding='utf-8')!=text:
         target.write_text(text,encoding='utf-8')

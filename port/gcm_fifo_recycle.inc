@@ -147,8 +147,10 @@ int port_check_fifo_callback_recycle(u32 ea)
     cellGcm_rsx_process_fifo();
     int recycled=port_fifo_wrap.acknowledged && vm_read32(ctx+4)==tail && vm_read32(ctx+8)==tail &&
         port_fifo_recycle(ctx,0)==CELL_OK && vm_read32(ctx+8)==ea && vm_read32(ctx+4)==end;
-    const int resumed=cellGcmSetPrepareFlip((void*)(uintptr_t)ctx,0)==0 &&
-        vm_read32(ctx+8)==ea+8 && vm_read32(ea)==0x0004E924u;
+    const s32 resumed_qid=cellGcmSetPrepareFlip((void*)(uintptr_t)ctx,0);
+    const int resumed=resumed_qid>=0 && resumed_qid<8 &&
+        cellGcmGetDisplayBufferByFlipIndex((u32)resumed_qid)==0 &&
+        vm_read32(ctx+8)==ea+8 && vm_read32(ea)==0x0004E944u && vm_read32(ea+4)==0;
     int ok=progress_wait && timeout && short_held && after_flip && ownership_held && drained && recycled && resumed;
     fprintf(stderr,"[compat-check] FIFO callback progress-wait=%d timeout=%d short-held=%d flip-tail-held=%d ownership-held=%d autonomous-publish=%d acknowledged=%d short-resumed=%d %s\n",
         progress_wait,timeout,short_held,after_flip,ownership_held,drained,recycled,resumed,ok?"PASS":"FAIL");
