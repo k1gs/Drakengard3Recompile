@@ -118,6 +118,12 @@ set(PS3RECOMP_SCAFFOLD
     "${CMAKE_CURRENT_BINARY_DIR}/ppu_sysprx.cpp"
 )
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/compat_source.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_runtime.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_edat.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_input.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_spu_tasks.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_spu_dispatch.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_gcm.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/gcm_fifo_recycle.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_renderer.py"
@@ -254,18 +260,15 @@ set(PORT_CHECK_SOURCES
     checks/queue_wake_checks.cpp
     checks/ppu_vmx_checks.cpp
     checks/spu_dispatch_checks.cpp
+    checks/spu_image_cache_checks.cpp
     checks/spu_task_checks.cpp
     checks/gcm_checks.cpp
     checks/msdsp_checks.c
     checks/audio_decoder_checks.c
 )
 
-add_executable(${PROJECT_NAME}
-    main.cpp
-    ${PORT_RUNTIME_SOURCES}
-    ${PORT_COMPAT_SOURCES}
-    ${PORT_DIAGNOSTIC_SOURCES}
-    ${PORT_CHECK_SOURCES}
+set(PORT_PREPARED_SOURCES
+    ${PS3RECOMP_SCAFFOLD}
     "${CMAKE_CURRENT_BINARY_DIR}/edat_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/spu_workload_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/spu_channels_compat.c"
@@ -279,8 +282,15 @@ add_executable(${PROJECT_NAME}
     "${CMAKE_CURRENT_BINARY_DIR}/rsx_fp_decompiler_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/rsx_vp_decompiler_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/rsx_commands_compat.c"
+)
+add_executable(${PROJECT_NAME}
+    main.cpp
+    ${PORT_RUNTIME_SOURCES}
+    ${PORT_COMPAT_SOURCES}
+    ${PORT_DIAGNOSTIC_SOURCES}
+    ${PORT_CHECK_SOURCES}
+    ${PORT_PREPARED_SOURCES}
     stubs.cpp
-    ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
     ${RECOMP_SOURCES}
     ${SPU_SOURCES}
@@ -330,6 +340,16 @@ if(SPU_SOURCES)
         endif()
     endif()
 endif()
+
+# Copied SDK sources use SDK-root-relative headers. Keep this include path
+# local to those files so unrelated game lifts keep their original lookup.
+set_property(SOURCE ${PORT_PREPARED_SOURCES} "${CMAKE_CURRENT_BINARY_DIR}/spu_dispatch_mt_compat.c"
+    APPEND PROPERTY INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}")
+
+# The standalone EDAT contract includes the prepared C implementation directly.
+add_executable(edat_contract EXCLUDE_FROM_ALL ../tests/native_edat_contract.c)
+target_include_directories(edat_contract PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${PS3RECOMP_DIR}")
+target_compile_definitions(edat_contract PRIVATE _CRT_SECURE_NO_WARNINGS)
 
 # app.rc carries the icon, the version block and the manifest, and needs a
 # resource compiler. Listing it as a source on a host that has none is not a

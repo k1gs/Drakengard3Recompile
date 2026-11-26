@@ -19,6 +19,7 @@ from prepare_rt_lifetime import prepare as prepare_rt_lifetime
 from prepare_clear import prepare as prepare_clear
 from prepare_color_surfaces import prepare as prepare_color_surfaces
 from prepare_rt_layouts import prepare as prepare_rt_layouts
+from compat_source import resolve_local_includes
 
 
 def prepare(sdk, output):
@@ -922,10 +923,7 @@ static int off_rt_get(''')
     replace('if (m && SUCCEEDED(iq->lpVtbl->GetMessage(iq, mi, m, &len))) {',
             'if (m && SUCCEEDED(iq->lpVtbl->GetMessage(iq, mi, m, &len)) &&\n'
             '                    (m->Severity<=D3D12_MESSAGE_SEVERITY_ERROR || _printed<80)) {')
-    def include(m):
-        path=source.parent/m[1]
-        return '#include "'+path.resolve().as_posix()+'"' if path.is_file() else m[0]
-    text=re.sub(r'#include "([^"]+)"',include,text)
+    text=resolve_local_includes(text, source, sdk)
     target=output/'rsx_d3d12_backend_compat.c'
     if not target.exists() or target.read_text(encoding='utf-8')!=text:
         target.write_text(text,encoding='utf-8')

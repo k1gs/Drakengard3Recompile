@@ -2,15 +2,19 @@
 import re
 
 
-def resolve_local_includes(text, source):
-    """Keep local SDK includes valid when a translation unit is relocated."""
+def resolve_local_includes(text, source, sdk):
+    """Preserve SDK header identity when a source is copied into the build tree."""
+    sdk_root = sdk.resolve()
+
     def resolve(match):
-        candidate = source.parent / match.group(1)
+        candidate = source.parent / match["header"]
         if candidate.is_file():
-            return '#include "' + candidate.resolve().as_posix() + '"'
+            header = candidate.resolve().relative_to(sdk_root).as_posix()
+            return f'{match["directive"]}"{header}"'
         return match.group(0)
 
-    return re.sub(r'#include "([^"]+)"', resolve, text)
+    return re.sub(r'^(?P<directive>[ \t]*#[ \t]*include[ \t]*)"(?P<header>[^"\r\n]+)"',
+                  resolve, text, flags=re.MULTILINE)
 
 
 def write_if_changed(path, text):

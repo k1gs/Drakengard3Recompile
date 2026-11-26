@@ -1,7 +1,7 @@
 """Preserve pending GPU commands and expose their real IO mapping for diagnosis."""
-import re
 from pathlib import Path
 from prepare_nv0039 import prepare as prepare_nv0039
+from compat_source import resolve_local_includes
 
 
 def prepare(sdk, output):
@@ -180,10 +180,7 @@ void port_gcm_notify_write(u32 ea,u32 size) {
 }
 
 '''+anchor)
-    def include(m):
-        p=source.parent/m[1]
-        return '#include "'+p.resolve().as_posix()+'"' if p.is_file() else m[0]
-    text=re.sub(r'#include "([^"]+)"',include,text)
+    text=resolve_local_includes(text, source, sdk)
     text+='\n/* Read-only mapping used by title FIFO snapshots. */\nu32 port_gcm_io_ea(u32 io) { return gcm_io2ea(io); }\n'
     text+='''
 /* Isolated native contract fixture; only called by --check-gcm-park. */

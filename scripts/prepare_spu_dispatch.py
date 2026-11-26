@@ -1,5 +1,5 @@
 """Make unresolved SPU dispatch and interpreter gaps fail with a local LS capture."""
-import re
+from compat_source import resolve_local_includes
 
 
 def replace_once(text, old, new):
@@ -126,10 +126,7 @@ static uint64_t spu_host_ns(void)
             text = replace_once(text, old, old.replace('return 1;', 'port_spu_branch_missing(ctx); return 1;'))
             old = '        ctx->pc = pc; ctx->status = SPU_STATUS_STOPPED_BY_HALT; return 1;'
             text = replace_once(text, old, '        ctx->pc = pc; port_spu_branch_missing(ctx); return 1;')
-        def include(match):
-            path = source.parent / match[1]
-            return '#include "' + path.resolve().as_posix() + '"' if path.is_file() else match[0]
-        text = re.sub(r'#include "([^"]+)"', include, text)
+        text = resolve_local_includes(text, source, sdk)
         text = ('#include "spu_context.h"\nvoid port_spu_branch_missing(spu_context*);\n'
                 'typedef void (*port_msdsp_fn)(spu_context*);\n'
                 'extern port_msdsp_fn port_msdsp_lookup(const spu_context*,uint32_t);\n' + text)

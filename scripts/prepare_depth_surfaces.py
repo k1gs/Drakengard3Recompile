@@ -248,4 +248,4 @@ def prepare_commands(sdk, output):
     text=prepare_stencil_commands(text)
     text=prepare_clear_commands(text)
     text=prepare_color_commands(text)
-    write_if_changed(output / 'rsx_commands_compat.c', resolve_local_includes(text, source))
+    write_if_changed(output / 'rsx_commands_compat.c', resolve_local_includes(text, source, sdk))

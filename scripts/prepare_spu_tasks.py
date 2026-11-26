@@ -1,6 +1,6 @@
 """Pin asynchronous task identity and arguments before starting a host worker."""
-import re
 from prepare_jobchains import prepare as prepare_jobchains
+from compat_source import resolve_local_includes
 
 
 def once(text, old, new):
@@ -182,10 +182,7 @@ def prepare_spurs(sdk, output):
         '                        port_task_dispatch_blocker("task image not dispatched");')
     text = once(text, '            return CELL_OK;\n        }\n    }\n\n    fprintf(stderr, "[cellSpurs] CreateTask:',
         '            port_taskset_unlock();\n            return CELL_OK;\n        }\n    }\n\n    port_taskset_unlock();\n    fprintf(stderr, "[cellSpurs] CreateTask:')
-    def include(m):
-        p = source.parent / m[1]
-        return '#include "' + p.resolve().as_posix() + '"' if p.is_file() else m[0]
-    text = re.sub(r'#include "([^"]+)"', include, text)
+    text = resolve_local_includes(text, source, sdk)
     text = ('#include <stdint.h>\nvoid port_taskset_lock(void);\nvoid port_taskset_unlock(void);\n'
         'void port_task_dispatch_blocker(const char*);\n'
         'int port_dispatch_task_locked(const uint8_t*,uint32_t,uint32_t,uint32_t,uint32_t);\n') + text

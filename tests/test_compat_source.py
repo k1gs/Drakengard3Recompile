@@ -1,23 +1,47 @@
+import re
+import subprocess
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+PROJECT = Path(__file__).resolve().parents[1]
+SDK = PROJECT / 'third_party' / 'ps3recomp'
+sys.path.insert(0, str(PROJECT / 'scripts'))
 from compat_source import resolve_local_includes, write_if_changed
 
 
 class CompatSourceTests(unittest.TestCase):
     def test_relocated_source_keeps_local_and_external_include_resolution(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / 'local.h').write_text('/* header */')
-            source = root / 'source.c'
-            text = '#include "local.h"\n#include "generated.h"\n#include <stdint.h>\n'
-            result = resolve_local_includes(text, source)
-            self.assertIn(f'#include "{(root / "local.h").as_posix()}"', result)
-            self.assertIn('#include "generated.h"', result)
-            self.assertIn('#include <stdint.h>', result)
+            for name in ('sdk', 'relocated SDK'):
+                sdk = Path(tmp) / name
+                module = sdk / 'runtime' / 'module'
+                module.mkdir(parents=True)
+                (module / 'local.h').touch()
+                (module.parent / 'shared.h').touch()
+                text = ('#include "local.h" // beside the SDK source\n'
+                        '  # include "../shared.h"\n'
+                        '#include "generated.h"\n#include <stdint.h>\n')
+                expected = ('#include "runtime/module/local.h" // beside the SDK source\n'
+                            '  # include "runtime/shared.h"\n'
+                            '#include "generated.h"\n#include <stdint.h>\n')
+                self.assertEqual(resolve_local_includes(text, module / 'source.c', sdk), expected)
+
+    @unittest.skipUnless((SDK / 'runtime/ppu/ppu_sysprx.cpp').is_file(), 'requires the project SDK')
+    def test_prepared_sources_have_portable_include_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            subprocess.run([sys.executable, PROJECT / 'scripts/prepare_runtime.py',
+                            '--sdk', SDK, '--out', output / 'ppu_sysprx.cpp'],
+                           cwd=output, check=True, stdout=subprocess.DEVNULL)
+            for source in output.iterdir():
+                text = source.read_text(encoding='utf-8')
+                for header in re.findall(r'^\s*#\s*include\s*["<]([^">]+)[">]', text, re.MULTILINE):
+                    with self.subTest(source=source.name, header=header):
+                        self.assertFalse(PureWindowsPath(header).anchor)
+            memory = (output / 'sys_memory_compat.c').read_text(encoding='utf-8')
+            self.assertIn('#include "sys_memory_compat.h"', memory)
 
     def test_unchanged_output_preserves_timestamp_and_original_line_endings(self):
         with tempfile.TemporaryDirectory() as tmp:

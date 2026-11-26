@@ -4,6 +4,7 @@ Only RAP-free license type 3 accepts this input. Existing MAC validation remains
 mandatory. No keys are embedded, searched for, logged, or written to sidecars.
 """
 from pathlib import Path
+from compat_source import resolve_local_includes, write_if_changed
 
 
 def prepare(sdk: Path, out: Path):
@@ -47,6 +48,5 @@ const char* edat_resolve(const char* host_path, char* buf, size_t cap)'''),
         if text.count(old) != 1:
             raise ValueError(f'EDAT SDK source changed: {old[:60]}')
         text = text.replace(old, new)
-    text = text.replace('"edat.h"', '"'+(source.parent/'edat.h').resolve().as_posix()+'"')
-    if not out.exists() or out.read_text(encoding='utf-8') != text:
-        out.write_text(text, encoding='utf-8')
+    text = resolve_local_includes(text, source, sdk)
+    write_if_changed(out, text)

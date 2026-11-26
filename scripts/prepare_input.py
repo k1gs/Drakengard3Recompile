@@ -1,5 +1,4 @@
 """Prepare native gamepad input and keyboard bindings without editing the SDK."""
-from pathlib import Path
 from compat_source import resolve_local_includes, write_if_changed
 
 
@@ -34,9 +33,7 @@ def prepare(sdk, output):
     text = text.replace(marker, keyboard + marker)
     begin = text.index('static u8 pad_sdl_axis_to_u8(int raw)')
     end = text.index('#endif /* PAD_BACKEND_SDL2 */', begin)
-    root = Path(__file__).resolve().parents[1]
-    backend = root / 'port/runtime/gamepad_sdl.inc'
-    text = text[:begin] + '#include "' + backend.as_posix() + '"\n\n' + text[end:]
+    text = text[:begin] + '#include "runtime/gamepad_sdl.inc"\n\n' + text[end:]
     changes = (
         ('#include <SDL2/SDL.h>', '#include <SDL.h>'),
         ('static SDL_GameController* s_sdl_controllers[PAD_MAX_HOST_PORTS];\nstatic int s_sdl_inited = 0;', ''),
@@ -65,6 +62,5 @@ def prepare(sdk, output):
     if text.count(old) != 1:
         raise ValueError('Pinned pressure anchor changed')
     text = text.replace(old, '&& data->button[pm[k].off] == 0)')
-    checks = root / 'port/checks/gamepad_checks.inc'
-    text += '\n#if PAD_BACKEND_SDL2\n#include "' + checks.as_posix() + '"\n#endif\n'
-    write_if_changed(output / 'cellPad_compat.c', resolve_local_includes(text, source))
+    text += '\n#if PAD_BACKEND_SDL2\n#include "checks/gamepad_checks.inc"\n#endif\n'
+    write_if_changed(output / 'cellPad_compat.c', resolve_local_includes(text, source, sdk))

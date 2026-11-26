@@ -48,8 +48,7 @@ def main():
     if loader_text.count(anchor)!=1: raise ValueError('PPU 64-bit write trace anchor changed')
     loader_text=loader_text.replace(anchor,anchor+' if(port_gpu_ppu_write64_needed(a)) { port_gpu_ppu_write(a,(unsigned int)(v>>32),__builtin_return_address(0)); port_gpu_ppu_write(a+4,(unsigned int)v,__builtin_return_address(0)); }')
     loader_text='extern "C" void port_gpu_ppu_write(unsigned long long,unsigned int,void*);\n'+loader_text
-    writer_gate=Path(__file__).resolve().parent.parent/'port/diagnostics/gpu_writer_gate.h'
-    loader_text='#include "'+writer_gate.as_posix()+'"\n'+loader_text
+    loader_text='#include "diagnostics/gpu_writer_gate.h"\n'+loader_text
     anchor='    } while (0)\n'
     # Notify only after the shared-memory write and coherence publication.
     begin=loader_text.index('#define VM_WRITE_COH(')
@@ -64,18 +63,18 @@ def main():
     if loader_text.count(anchor)!=1: raise ValueError('Indirect allocation trace anchor changed')
     loader_text=loader_text.replace(anchor,anchor+'\n    port_trace_allocation_call(ctx,__builtin_return_address(0));')
     loader_text='extern "C" void port_trace_allocation_call(void*,void*);\n'+loader_text
-    loader_text = resolve_local_includes(loader_text, loader)
+    loader_text = resolve_local_includes(loader_text, loader, a.sdk)
     loader_out=a.out.parent/'ppu_loader_compat.cpp'
     anchor='extern "C" void lv2_syscall(ppu_context* ctx)\n{'
     if loader_text.count(anchor)!=1: raise ValueError('Syscall profile anchor changed')
-    loader_text=loader_text.replace(anchor,'#include "'+(Path(__file__).resolve().parent.parent/'port/diagnostics/hle_profile.h').as_posix()+'"\n'+anchor+'\n    PortHleProfile port_profile(0x80000000u|(unsigned)ctx->gpr[11],ctx);')
+    loader_text=loader_text.replace(anchor,'#include "diagnostics/hle_profile.h"\n'+anchor+'\n    PortHleProfile port_profile(0x80000000u|(unsigned)ctx->gpr[11],ctx);')
     write_if_changed(loader_out, loader_text)
     hle_text=(a.sdk/'runtime/ppu/ppu_hle.cpp').read_text(encoding='utf-8')
     anchor='extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)\n{'
     if hle_text.count(anchor)!=1: raise ValueError('HLE profile anchor changed')
     hle_text=hle_text.replace(anchor,anchor+'\n    PortHleProfile port_profile(nid,ctx);')
-    hle_text=hle_text.replace(anchor,'#include "'+(Path(__file__).resolve().parent.parent/'port/diagnostics/hle_profile.h').as_posix()+'"\n'+anchor)
-    hle_text = resolve_local_includes(hle_text, a.sdk/'runtime/ppu/ppu_hle.cpp')
+    hle_text=hle_text.replace(anchor,'#include "diagnostics/hle_profile.h"\n'+anchor)
+    hle_text = resolve_local_includes(hle_text, a.sdk/'runtime/ppu/ppu_hle.cpp', a.sdk)
     hle_out=a.out.parent/'ppu_hle_compat.cpp'
     write_if_changed(hle_out, hle_text)
     event_source=a.sdk/'runtime/syscalls/sys_event.c'
@@ -86,7 +85,7 @@ def main():
         raise ValueError('Event receive diagnostic anchor changed')
     event_text=event_text.replace(anchor,anchor+'\n    port_event_wait_trace(ctx);')
     event_text='void port_event_wait_trace(void*);\n'+event_text
-    event_text = resolve_local_includes(event_text, event_source)
+    event_text = resolve_local_includes(event_text, event_source, a.sdk)
     event_out=a.out.parent/'sys_event_compat.c'
     write_if_changed(event_out, event_text)
     source = a.sdk / 'runtime/ppu/ppu_sysprx.cpp'
@@ -100,8 +99,7 @@ def main():
     text=text.replace(callback,'''extern "C" int32_t cellGcm_fifo_recycle(unsigned int ctx_ea);''')
     text=text.replace(call,'''    ctx->gpr[3] = (uint32_t)cellGcm_fifo_recycle((unsigned int)ctx->gpr[3]);''')
     # The output is outside the original source directory.
-    for relative in ('../platform/win32_compat.h', '../memory/vm.h'):
-        text = text.replace('"'+relative+'"', '"'+(source.parent/relative).resolve().as_posix()+'"')
+    text = resolve_local_includes(text, source, a.sdk)
     write_if_changed(a.out, text)
     print(f'Prepared lwcond wait and signal from SDK SHA256 {hashlib.sha256(raw).hexdigest()}')
     fs_source = a.sdk / 'runtime/ppu/ppu_fs.cpp'
@@ -121,8 +119,7 @@ def main():
         raise ValueError('FS host-path bridge anchor changed')
     fs_text = fs_text.replace(marker,
         'extern "C" void port_fs_host_path(char* out, size_t cap, const char* guest) { host_path(out, cap, guest); }\n'+marker)
-    for relative in ('../../libs/filesystem/edat.h', '../platform/win32_dirent.h', '../platform/win32_backtrace.h'):
-        fs_text = fs_text.replace('"'+relative+'"', '"'+(fs_source.parent/relative).resolve().as_posix()+'"')
+    fs_text = resolve_local_includes(fs_text, fs_source, a.sdk)
     fs_out = a.out.parent/'ppu_fs.cpp'
     write_if_changed(fs_out, fs_text)
     prepare_edat(a.sdk, a.out.parent/'edat_compat.c')
@@ -134,7 +131,7 @@ def main():
         raise ValueError('SPU job-miss anchor changed')
     text = text.replace(anchor, '        port_spu_job_missing(fp, image_size, job_ea);\n'+anchor)
     text = '#include <stdint.h>\nvoid port_spu_job_missing(uint64_t, uint32_t, uint32_t);\n'+text
-    text = resolve_local_includes(text, workload)
+    text = resolve_local_includes(text, workload, a.sdk)
     out = a.out.parent/'spu_workload_compat.c'
     write_if_changed(out, text)
     # One tracked record per possible 64-KiB page in the 256-MiB window.
@@ -145,11 +142,11 @@ def main():
     if text.count(old)!=1:
         raise ValueError('Memory allocation table declaration changed')
     text=text.replace(old,'#define SYS_MEMORY_ALLOC_MAX      4096')
-    text = resolve_local_includes(text, memory_header)
+    text = resolve_local_includes(text, memory_header, a.sdk)
     header_out=a.out.parent/'sys_memory_compat.h'
     write_if_changed(header_out, text)
     source=a.sdk/'runtime/syscalls/sys_memory.c'
-    text=source.read_text(encoding='utf-8').replace('"sys_memory.h"','"'+header_out.resolve().as_posix()+'"')
+    text=source.read_text(encoding='utf-8').replace('"sys_memory.h"','"sys_memory_compat.h"')
     text=prepare_memory(text)
     out=a.out.parent/'sys_memory_compat.c'
     write_if_changed(out, text)
