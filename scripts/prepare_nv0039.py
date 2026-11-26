@@ -1,4 +1,4 @@
-"""Checked NV0039 memory-transfer preparation."""
+"""Checked RSX memory-copy and inline-transfer preparation."""
 from pathlib import Path
 
 
@@ -10,6 +10,13 @@ def prepare(text):
         text=text.replace(old,new)
     once('static void gcm_2d_method(u32 subch, u32 method, u32 data)',
          (root/'port/nv0039.inc').read_text(encoding='utf-8')+'\nstatic void gcm_2d_method(u32 subch, u32 method, u32 data)')
+    # NV308A has 0x700 COLOR words. The guest rounds odd FIFO packets up
+    # to an even word count. SIZE_OUT.x defines which words reach memory.
+    once('if (method >= 0x0400 && method <= 0x07FC)',
+         'if (method >= 0x0400 && method <= 0x1FFC)')
+    once('            u32 idx = (method - 0x0400) >> 2;\n',
+         '            u32 idx = (method - 0x0400) >> 2;\n'
+         '            if (idx >= (s_gcm2d.size_out & 0xFFFFu)) return;\n')
     anchor='    if (subch == 2 || subch == 3) {'
     once(anchor,'    if(subch==1 && port_nv0039_method(method,data))return;\n'+anchor)
     once('    memset(s_report_data, 0, sizeof(s_report_data));',

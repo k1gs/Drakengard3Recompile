@@ -48,6 +48,50 @@ static int port_check_report_dma(void)
     return full && steps && unwritten && unsupported && last && bounds && reset;
 }
 
+static int port_check_nv308a_inline(void)
+{
+    extern u8* vm_base;
+    /* Replay the title's one-word Y32 upload with even FIFO padding, then
+     * exercise the row boundary, zero width and the full COLOR register bank. */
+    const u32 dst=0x1000, x=8, y=1, pitch=0x1000;
+    u8* row=vm_base+s_config.localAddress+dst+y*pitch+x*4;
+    enum { region_size=4+0x700*4+4 };
+    u8 saved[region_size],expected[region_size],saved_state[sizeof(s_gcm2d)];
+    memcpy(saved_state,&s_gcm2d,sizeof(saved_state));
+    memcpy(saved,row-4,sizeof(saved));
+    gcm_2d_method(3,0x188,0xFEED0000u);
+    gcm_2d_method(3,0x30C,dst);
+    gcm_2d_method(3,0x300,0xBu);
+    gcm_2d_method(3,0x304,(pitch<<16)|pitch);
+    gcm_2d_method(5,0x304,(y<<16)|x);
+    const struct { u32 width,first,count; } cases[]={
+        {1,0,2}, {3,0,4}, {0,0,2}, {257,255,3}, {0x700,0x6FE,2}
+    };
+    unsigned passed=0;
+    for(unsigned c=0;c<sizeof(cases)/sizeof(cases[0]);c++) {
+        memset(row-4,0xCD,region_size);
+        memset(expected,0xCD,sizeof(expected));
+        gcm_2d_method(5,0x308,0x10000u|cases[c].width);
+        /* The first packet sets both sizes to 1. The three-word case also
+         * checks that the output extent governs when the input is wider. */
+        gcm_2d_method(5,0x30C,0x10000u|(c==1 ? 4u : cases[c].width));
+        for(u32 i=cases[c].first;i<cases[c].first+cases[c].count;i++) {
+            u32 word=i==0 ? 0x00003F80u : 0x11223300u+i;
+            if(i>=cases[c].width) word=0;
+            gcm_2d_method(5,0x400+4*i,word);
+            if(i<cases[c].width) {
+                for(unsigned b=0;b<4;b++)
+                    expected[4+4*i+b]=(u8)(word>>(24-8*b));
+            }
+        }
+        passed+=memcmp(row-4,expected,sizeof(expected))==0;
+    }
+    memcpy(row-4,saved,sizeof(saved));
+    memcpy(&s_gcm2d,saved_state,sizeof(saved_state));
+    fprintf(stderr,"[compat-check] NV308A bounded COLOR rows/canaries=%u/5\n",passed);
+    return passed==5;
+}
+
 /* Exercise the actual 2D method dispatcher, with independent guest bytes. */
 int port_check_nv0039(void)
 {
@@ -55,6 +99,7 @@ int port_check_nv0039(void)
     CellGcmConfig saved=s_config;
     CellGcmDisplayInfo saved_display=s_display_buffers[0];int saved_display_set=s_display_buffer_set[0];
     s_config.localAddress=0x40000;s_config.localSize=0x10000;
+    int nv308a=port_check_nv308a_inline();
     memset(s_ea_address_table,0xFF,sizeof(s_ea_address_table));
     s_ea_address_table[0]=1;s_ea_address_table[1]=3;s_ea_address_table[2]=5;
     u32 source=0x40100,dest=0x40300;
@@ -173,7 +218,7 @@ int port_check_nv0039(void)
     fprintf(stderr,"[compat-check] NV0039 matrix=%u/128 discontiguous-pages=%d rejected=%u/9 disjoint=%d display-guard=%d reset=%d\n",matrix,pages,rejected,disjoint,display_guard,reset);
     fprintf(stderr,"[compat-check] NV0039 lazy-destination=%d refuses-unbacked-source=%d MAIN-not-materialized=%d GPU-not-materialized=%d\n",
         lazy_dest,unbacked_source,main_not_materialized,gpu_not_materialized);
-    return deferred&&copied&&padding&&matrix==128&&pages&&reports&&rejected==9&&disjoint&&display_guard&&reset&&lazy_dest&&unbacked_source&&main_not_materialized&&gpu_not_materialized?0:1;
+    return nv308a&&deferred&&copied&&padding&&matrix==128&&pages&&reports&&rejected==9&&disjoint&&display_guard&&reset&&lazy_dest&&unbacked_source&&main_not_materialized&&gpu_not_materialized?0:1;
 }
 
 /* Called by the hardware ZPASS check after two actual GET_REPORT commands. */
