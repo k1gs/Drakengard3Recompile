@@ -21,8 +21,8 @@ from prepare_rt_layouts import prepare as prepare_rt_layouts
 
 
 def prepare(sdk, output):
-    # Both source and destination temporary indices occupy six bits. Keep the
-    # HLSL storage and initialization valid for every index the decoder emits.
+    # Source and destination indices are six bits. Initialize all lanes in
+    # both files without asking FXC to unroll 64 loop iterations per shader.
     fp_source=sdk/'libs/video/rsx_fp_decompiler.c'
     fp_text=fp_source.read_text(encoding='utf-8')
     # The masked register write must select a lane without arithmetic on the
@@ -45,8 +45,10 @@ def prepare(sdk, output):
             raise ValueError('Pinned fragment predicate emission changed')
         fp_text = fp_text.replace(old, new)
     for old,new in (
-        ('float4 r[48]; float4 h[48];', 'float4 r[64]; float4 h[64];'),
-        ('_i < 48; _i++', '_i < 64; _i++'),
+        ('float4 r[48]; float4 h[48];',
+         'float4 r[64] = (float4[64])0; float4 h[64] = (float4[64])0;'),
+        (r'        "    [unroll] for (int _i = 0; _i < 48; _i++) { r[_i] = (float4)0; h[_i] = (float4)0; }\n"',
+         ''),
     ):
         if fp_text.count(old)!=1:
             raise ValueError('Pinned fragment register declaration changed: '+old)

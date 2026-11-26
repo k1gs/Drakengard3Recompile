@@ -29,6 +29,7 @@ class PipelineStoragePreparationTests(unittest.TestCase):
             fp_first = (Path(a) / 'rsx_fp_decompiler_compat.c').read_text(encoding='utf-8')
             fp_second = (Path(b) / 'rsx_fp_decompiler_compat.c').read_text(encoding='utf-8')
             self.assertEqual(fp_first, fp_second)
-            self.assertIn('float4 r[64]; float4 h[64];', fp_first)
-            self.assertIn('_i < 64; _i++', fp_first)
+            for reg in ('r', 'h'):
+                self.assertIn(f'float4 {reg}[64] = (float4[64])0;', fp_first)
+            self.assertNotIn('r[_i] = (float4)0', fp_first)
             self.assertIn('rsx_fp_decompiler_compat.c', (ROOT / 'port/CMakeLists.txt').read_text(encoding='utf-8'))
