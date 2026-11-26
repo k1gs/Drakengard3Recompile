@@ -1,6 +1,7 @@
 """Build-local renderer fixes, capture diagnostics and CPU contract fixtures."""
 import re
 from pathlib import Path
+from prepare_texcoord_varyings import prepare_draw_output_mask, prepare_fragment_inputs, prepare_vertex_outputs
 from prepare_texture_units import prepare as prepare_texture_units
 from prepare_frame_boundaries import prepare as prepare_frame_boundaries
 from prepare_texture_cache import prepare as prepare_texture_cache
@@ -24,7 +25,8 @@ def prepare(sdk, output):
     # Source and destination indices are six bits. Initialize all lanes in
     # both files without asking FXC to unroll 64 loop iterations per shader.
     fp_source=sdk/'libs/video/rsx_fp_decompiler.c'
-    fp_text=fp_source.read_text(encoding='utf-8')
+    prepare_vertex_outputs(sdk, output)
+    fp_text=prepare_fragment_inputs(fp_source.read_text(encoding='utf-8'))
     # The masked register write must select a lane without arithmetic on the
     # inactive value. A lerp can propagate NaNs/Infs or round an active value.
     for old, new in (
@@ -57,7 +59,7 @@ def prepare(sdk, output):
     if not fp_target.exists() or fp_target.read_text(encoding='utf-8')!=fp_text:
         fp_target.write_text(fp_text,encoding='utf-8')
     source=sdk/'libs/video/rsx_d3d12_backend.c'
-    text=source.read_text(encoding='utf-8')
+    text=prepare_draw_output_mask(source.read_text(encoding='utf-8'))
     start=text.index('    /* Garbage-projection fallback (vkcube; see the original comment). */')
     end=text.index('\n}\n',start)
     old=text[start:end]
@@ -650,7 +652,7 @@ int port_check_depth_state(void)
 int port_check_vertex_constants(void)
 {
     rsx_state* st=(rsx_state*)calloc(1,sizeof(*st));
-    unsigned char* cb=(unsigned char*)calloc(1,VP_CB_STRIDE);
+    unsigned char* cb=(unsigned char*)calloc(3,VP_CB_STRIDE);
     if(!st || !cb) { free(st);free(cb);return 2; }
     const rsx_state* saved_state=s_d3d.current_rsx_state;
     void* saved_cb=s_d3d.vp_cb_mapped;
@@ -662,16 +664,25 @@ int port_check_vertex_constants(void)
     st->viewport_scale[2]=0.5f;st->viewport_offset[2]=0.25f;
     int ok=1;
     const float first[]={-0.831469f,0.0f,16.0f};
+    const u32 masks[]={1u<<12,(1u<<13)|0x20u,0};
     for(unsigned n=0;n<3;n++) {
         float* constants=(float*)st->vertex_constants;
         for(unsigned k=0;k<RSX_MAX_VERTEX_CONSTANTS*4;k++) constants[k]=(float)(k%17)-8.0f;
         constants[0]=first[n];
-        vp_record_cb(0,-1,NULL);
-        float* viewport=(float*)(cb+RSX_MAX_VERTEX_CONSTANTS*16);
-        int same=!memcmp(cb,st->vertex_constants,RSX_MAX_VERTEX_CONSTANTS*16);
+        rsx_process_method(st,NV4097_SET_VERTEX_ATTRIB_OUTPUT_MASK,masks[n]);
+        vp_record_cb(n,-1,NULL);
+        unsigned char* slot=cb+n*VP_CB_STRIDE;
+        float* viewport=(float*)(slot+RSX_MAX_VERTEX_CONSTANTS*16);
+        int same=!memcmp(slot,st->vertex_constants,RSX_MAX_VERTEX_CONSTANTS*16);
         int depth=viewport[2]==0.5f && viewport[6]==0.25f;
         fprintf(stderr,"[compat-check] VP constants c00=%g exact=%d depth=%d %s\n",first[n],same,depth,same&&depth?"PASS":"FAIL");
         if(!same || !depth) ok=0;
+    }
+    for(unsigned n=0;n<3;n++) {
+        u32 mask;
+        memcpy(&mask,cb+n*VP_CB_STRIDE+(RSX_MAX_VERTEX_CONSTANTS+2)*16,sizeof(mask));
+        if(mask!=masks[n]) ok=0;
+        fprintf(stderr,"[compat-check] VP draw=%u output mask=%08X expected=%08X\n",n,mask,masks[n]);
     }
     s_d3d.current_rsx_state=saved_state;s_d3d.vp_cb_mapped=saved_cb;
     s_d3d.vp_fpcb_mapped=saved_fp;s_d3d.vp_parity=saved_parity;s_d3d.vp_uses_c03=saved_uses;

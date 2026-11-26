@@ -122,6 +122,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/gcm_fifo_recycle.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_renderer.py"
     "${PS3RECOMP_DIR}/libs/video/rsx_fp_decompiler.c"
+    "${PS3RECOMP_DIR}/libs/video/rsx_vp_decompiler.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_texcoord_varyings.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_pipeline_storage.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_feedback_surfaces.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_pix_capture.py"
@@ -275,6 +277,7 @@ add_executable(${PROJECT_NAME}
     "${CMAKE_CURRENT_BINARY_DIR}/cellPad_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/rsx_d3d12_backend_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/rsx_fp_decompiler_compat.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/rsx_vp_decompiler_compat.c"
     "${CMAKE_CURRENT_BINARY_DIR}/rsx_commands_compat.c"
     stubs.cpp
     ${PS3RECOMP_SCAFFOLD}

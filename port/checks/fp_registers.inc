@@ -1,3 +1,25 @@
+static int port_check_fp_texcoords(char* hlsl)
+{
+    unsigned passed=0;
+    for(unsigned unit=7;unit<=9;unit++) {
+        u8 program[16]={0};
+        /* MOV r0, TEXn with an identity swizzle and unconditional execution. */
+        port_fp_word(program,(1u<<24)|((4u+unit)<<13)|(15u<<9)|1u);
+        port_fp_word(program+4,1u|(1u<<11)|(2u<<13)|(3u<<15)|(7u<<18));
+        char operand[32];
+        snprintf(operand,sizeof(operand),"(input.tc%u).xyzw",unit);
+        int decoded=port_decompile_guest_fp(program,sizeof(program),1,0,hlsl,RSX_FP_HLSL_BUFFER_SIZE);
+        ID3DBlob* shader=NULL;
+        HRESULT hr=decoded==1 && strstr(hlsl,operand)
+            ? D3DCompile(hlsl,strlen(hlsl),"fp-texcoord",NULL,NULL,"main","ps_5_0",0,0,&shader,NULL)
+            : E_FAIL;
+        if(SUCCEEDED(hr) && shader) passed++;
+        if(shader) shader->lpVtbl->Release(shader);
+    }
+    fprintf(stderr,"[compat-check] fragment TEX7..9 forwarded and compiled=%u/3\n",passed);
+    return passed==3;
+}
+
 static int port_check_fp_predicated_selection(char* hlsl)
 {
     u8 program[112]={0};
@@ -83,7 +105,7 @@ static int port_check_fp_registers(void)
             }
         }
     }
-    const int selection=port_check_fp_predicated_selection(hlsl);
+    const int selection=port_check_fp_predicated_selection(hlsl) && port_check_fp_texcoords(hlsl);
     free(hlsl);
     fprintf(stderr,"[compat-check] fragment registers r0..63/h0..63 direct/predicated compiled=%u/256 PASS\n",compiled);
     return compiled==256 && selection;
