@@ -1210,6 +1210,9 @@ int port_check_pipeline_cache(void)''')
     if(trace) fprintf(stderr,"[RENDER] FP compile end seq=%u ms=%llu hr=%08lX cache_hit=%d\n",seq,GetTickCount64()-compile_started,(unsigned long)hr,bytecode_hit);''')
     once('%d calls %d MISS %dKB hashed] | guest',
          '%d calls %d MISS %dKB hashed, %u FP bytecode hits] | guest')
+    once('static void port_reset_fp_perf_window(void)',
+         'static void port_emit_texture_perf_window(void);\n\n'
+         'static void port_reset_fp_perf_window(void)')
     once('s_perf_pso_miss, s_perf_pso_hashbytes / 1024,',
          's_perf_pso_miss, s_perf_pso_hashbytes / 1024, s_perf_fp_bytecode_hits,')
     once('s_perf_pso_calls = 0; s_perf_pso_miss = 0; s_perf_pso_hashbytes = 0;',
@@ -1226,7 +1229,8 @@ int port_check_pipeline_cache(void)''')
         s_perf_fp_creates++;
     }
     if(trace) fprintf(stderr,"[RENDER] PSO end seq=%u ms=%llu hr=%08lX\n",seq,GetTickCount64()-compile_started,(unsigned long)hr);''')
-    once('            s_perf_frame = 0.0; s_perf_tex',r'''            port_emit_fp_perf_window();
+    once('            s_perf_frame = 0.0; s_perf_tex',r'''            port_emit_texture_perf_window();
+            port_emit_fp_perf_window();
             s_perf_frame = 0.0; s_perf_tex''')
     return text
 

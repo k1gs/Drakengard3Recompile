@@ -10,6 +10,7 @@ def prepare(text):
 
     once('    u32 csum;           /* sparse checksum of the source bytes last uploaded */',
          '    u64 last_used;      /* host cache access order; never guest time */\n'
+         '    size_t retained_bytes; /* source snapshot and both D3D12 allocations */\n'
          '    u32 csum;           /* sparse checksum of the source bytes last uploaded */')
 
     once('VPTexSlot             vp_tex[VP_TEX_SLOTS];', 'VPTexSlot*            vp_tex;\n    unsigned             vp_tex_capacity;')
@@ -33,20 +34,52 @@ def prepare(text):
     once('static int vp_upload_tex_slot(', r'''/* Pick storage only after the complete key lookup has missed. Resources
  * referenced by this submission remain pinned until it has completed. */
 static u64 port_texture_use_clock;
+static size_t s_port_texture_retained_bytes;
+static unsigned s_port_texture_evictions;
+
+/* Retention across submissions. A single live submission may need more. */
+#define PORT_TEXTURE_CACHE_BYTES (256ull * 1024 * 1024)
+
 static void port_texture_touch(VPTexSlot* slot)
 {
     slot->last_used=++port_texture_use_clock;
 }
 
+static int port_texture_oldest_resident(const VPTexSlot* slots, unsigned count)
+{
+    int oldest = -1;
+    for (unsigned i = 0; i < count; ++i) {
+        if (slots[i].used || !slots[i].res) continue;
+        if (oldest < 0 || slots[i].last_used < slots[oldest].last_used)
+            oldest = (int)i;
+    }
+    return oldest;
+}
+
 static int port_texture_free_slot(const VPTexSlot* slots, unsigned count)
 {
-    int reusable=-1;
-    for(unsigned i=0;i<count;i++) {
-        if(slots[i].used) continue;
-        if(!slots[i].res) return (int)i;
-        if(reusable<0 || slots[i].last_used<slots[reusable].last_used) reusable=(int)i;
+    for (unsigned i = 0; i < count; ++i)
+        if (!slots[i].used && !slots[i].res) return (int)i;
+    return port_texture_oldest_resident(slots, count);
+}
+
+static void port_texture_release_slot_storage(VPTexSlot* slot)
+{
+    if (slot->res) slot->res->lpVtbl->Release(slot->res);
+    if (slot->up) slot->up->lpVtbl->Release(slot->up);
+    free(slot->source_bytes);
+    s_port_texture_retained_bytes -= slot->retained_bytes;
+    memset(slot, 0, sizeof(*slot));
+}
+
+static void port_texture_trim(size_t limit)
+{
+    while (s_port_texture_retained_bytes > limit) {
+        int victim = port_texture_oldest_resident(s_d3d.vp_tex, s_d3d.vp_tex_capacity);
+        if (victim < 0) break;
+        port_texture_release_slot_storage(&s_d3d.vp_tex[victim]);
+        ++s_port_texture_evictions;
     }
-    return reusable;
 }
 
 /* Only CPU metadata moves; recorded GPU resource identities stay valid. */
@@ -61,6 +94,18 @@ static int port_texture_grow(VPTexSlot** slots,unsigned* capacity)
     memset(grown+old,0,(size_t)(count-old)*sizeof(*grown));
     *slots=grown;*capacity=count;
     return (int)old;
+}
+
+/* Keep idle textures when the cache still fits. If every slot is pinned,
+ * grow regardless of the retention budget to preserve submitted descriptors. */
+static int port_texture_slot_for_upload(VPTexSlot** slots, unsigned* capacity,
+                                        size_t resident, size_t limit)
+{
+    int reusable = port_texture_free_slot(*slots, *capacity);
+    if (reusable >= 0 && (!(*slots)[reusable].res || resident >= limit))
+        return reusable;
+    int grown = port_texture_grow(slots, capacity);
+    return grown >= 0 ? grown : reusable;
 }
 
 int port_check_texture_cache(void)
@@ -103,10 +148,23 @@ int port_check_texture_cache(void)
     if(capacity<200) growth=0;
     for(unsigned i=0;i<200 && growth;i++)
         if(pool[i].key!=i+1 || !pool[i].used || pool[i].res!=(ID3D12Resource*)&slots[0]) growth=0;
+    if (!growth) { free(pool); return 1; }
+    /* Start a second submission after filling all metadata slots. */
+    for (unsigned i = 0; i < capacity; ++i) {
+        pool[i].used = 0;
+        pool[i].res = (ID3D12Resource*)&slots[0];
+        pool[i].last_used = i + 1;
+    }
+    unsigned previous_capacity = capacity;
+    int retain = port_texture_slot_for_upload(&pool, &capacity, 100, 101) == (int)previous_capacity;
+    unsigned limited_capacity = previous_capacity;
+    int at_limit = port_texture_slot_for_upload(&pool, &limited_capacity, 101, 101) == 0;
     free(pool);
-    int ok=empty&&pinned&&reuse&&full&&pinned_empty&&growth&&oldest&&oldest_unpinned&&empty_before_old;
-    fprintf(stderr,"[compat-check] texture cache empty=%d pinned=%d reuse=%d full=%d pinned-empty=%d growth200=%d oldest=%d oldest-unpinned=%d empty-before-old=%d %s\n",
-        empty,pinned,reuse,full,pinned_empty,growth,oldest,oldest_unpinned,empty_before_old,ok?"PASS":"FAIL");
+    int ok=empty&&pinned&&reuse&&full&&pinned_empty&&growth&&oldest&&oldest_unpinned&&empty_before_old&&
+        retain&&at_limit;
+    fprintf(stderr,"[compat-check] texture cache empty=%d pinned=%d reuse=%d full=%d pinned-empty=%d growth200=%d oldest=%d oldest-unpinned=%d empty-before-old=%d batch-retain=%d budget-reuse=%d %s\n",
+        empty,pinned,reuse,full,pinned_empty,growth,oldest,oldest_unpinned,empty_before_old,
+        retain,at_limit,ok?"PASS":"FAIL");
     return ok?0:1;
 }
 

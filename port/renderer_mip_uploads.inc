@@ -63,6 +63,42 @@ static int port_mip_key_equal(const VPTexSlot* c,u32 off,u32 w,u32 h,u32 fmt,
         c->cube==cube && c->mip_levels==levels && c->source_pitch==pitch;
 }
 
+/* These counters share the renderer's 20-frame PERF window. */
+static struct {
+    unsigned long long search_calls, compare_calls, compare_bytes;
+    unsigned long long hits, misses, repeats, upload_calls, upload_bytes;
+    unsigned long long watch_hits;
+    double lookup_seconds, watch_seconds, compare_seconds, upload_seconds;
+} s_port_texture_profile;
+
+static int port_texture_profile_on(void)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char* value = getenv("PORT_TEXTURE_PROFILE");
+        enabled = value && value[0] && value[0] != '0';
+    }
+    return enabled;
+}
+
+static void port_emit_texture_perf_window(void)
+{
+    if (!port_texture_profile_on()) return;
+    fprintf(stderr, "[PERF-TEX] searches=%llu compares=%llu compare_span_bytes=%llu memcmp=%.6fs "
+        "hits=%llu misses=%llu repeats=%llu uploads=%llu upload_bytes=%llu upload_cpu=%.6fs "
+        "watch_hits=%llu watch=%.6fs lookup_total=%.6fs evictions=%u capacity=%u resident_bytes=%llu\n",
+        s_port_texture_profile.search_calls, s_port_texture_profile.compare_calls,
+        s_port_texture_profile.compare_bytes, s_port_texture_profile.compare_seconds,
+        s_port_texture_profile.hits, s_port_texture_profile.misses,
+        s_port_texture_profile.repeats, s_port_texture_profile.upload_calls,
+        s_port_texture_profile.upload_bytes, s_port_texture_profile.upload_seconds,
+        s_port_texture_profile.watch_hits, s_port_texture_profile.watch_seconds,
+        s_port_texture_profile.lookup_seconds,s_port_texture_evictions,
+        s_d3d.vp_tex_capacity,(unsigned long long)s_port_texture_retained_bytes);
+    memset(&s_port_texture_profile, 0, sizeof(s_port_texture_profile));
+    s_port_texture_evictions=0;
+}
+
 static int vp_upload_tex_slot(u32 off,u32 w,u32 h,u32 fmt,int cube,u32 mips,u32 source_pitch)
 {
     extern uint8_t* vm_base;
@@ -81,27 +117,62 @@ static int vp_upload_tex_slot(u32 off,u32 w,u32 h,u32 fmt,int cube,u32 mips,u32 
     u32 pitch=(fmt&0x20u)?levels[0].tl.row_bytes:0;
     static int nocache=-1;
     if(nocache<0) nocache=getenv("TEX_NOCACHE")?atoi(getenv("TEX_NOCACHE")):0;
+    const int profile = port_texture_profile_on();
+    const double lookup_started = profile ? perf_now() : 0.0;
+    // Observe memory before checking or capturing bytes. A write during the
+    // comparison or the snapshot remains visible to the next lookup.
+    extern u64 port_texture_source_version(u32 address, size_t bytes);
+    const u64 version = nocache ? 0 : port_texture_source_version(off, (size_t)span);
+    if (profile) {
+        ++s_port_texture_profile.search_calls;
+        s_port_texture_profile.watch_seconds += perf_now() - lookup_started;
+    }
     int slot=-1;
     for(unsigned i=0;i<s_d3d.vp_tex_capacity;i++) {
         VPTexSlot* c=&s_d3d.vp_tex[i];
         if(!port_mip_key_equal(c,off,w,h,fmt,cube,count,pitch)) continue;
-        /* Compare every source byte, including tiny lower levels and all
-         * faces. An exact retained copy replaces the old sparse L0 checksum. */
-        if(!nocache && c->source_size==(size_t)span && c->source_bytes &&
-           !memcmp(c->source_bytes,vm_base+off,(size_t)span)) {
-            c->used=1;port_texture_touch(c);return (int)i;
+        const int comparable = !nocache && c->source_size == (size_t)span && c->source_bytes;
+        const int unchanged = comparable && version && c->source_version == version;
+        int same = unchanged;
+        if (comparable && !unchanged) {
+            const double compare_started = profile ? perf_now() : 0.0;
+            same = memcmp(c->source_bytes, vm_base + off, (size_t)span) == 0;
+            if (profile) {
+                s_port_texture_profile.compare_seconds += perf_now() - compare_started;
+                ++s_port_texture_profile.compare_calls;
+                s_port_texture_profile.compare_bytes += span;
+            }
+        }
+        if (same) {
+            c->source_version = version;
+            if (profile) {
+                ++s_port_texture_profile.hits;
+                if (c->used) ++s_port_texture_profile.repeats;
+                s_port_texture_profile.watch_hits += unchanged;
+                s_port_texture_profile.lookup_seconds += perf_now() - lookup_started;
+            }
+            c->used = 1;
+            port_texture_touch(c);
+            return (int)i;
         }
         /* A descriptor already recorded in this batch keeps its old resource. */
-        if(!c->used) {slot=(int)i;break;}
+        if (!c->used && slot < 0) slot = (int)i;
     }
-    if(slot<0) slot=port_texture_free_slot(s_d3d.vp_tex,s_d3d.vp_tex_capacity);
-    if(slot<0) slot=port_texture_grow(&s_d3d.vp_tex,&s_d3d.vp_tex_capacity);
+    if (profile) {
+        ++s_port_texture_profile.misses;
+        s_port_texture_profile.lookup_seconds += perf_now() - lookup_started;
+    }
+    if (slot < 0)
+        slot = port_texture_slot_for_upload(&s_d3d.vp_tex, &s_d3d.vp_tex_capacity,
+                                            s_port_texture_retained_bytes, PORT_TEXTURE_CACHE_BYTES);
     if(slot<0) {fprintf(stderr,"[mip-upload] cache allocation failed\n");abort();}
+    const double upload_started = profile ? perf_now() : 0.0;
     VPTexSlot* t=&s_d3d.vp_tex[slot];
-    if(t->used) abort();
+    if (t->used) abort();
+    if (t->res && !port_mip_key_equal(t, off, w, h, fmt, cube, count, pitch))
+        ++s_port_texture_evictions;
     if(t->res && (t->w!=w || t->h!=h || t->fmt!=fmt || t->cube!=cube || t->mip_levels!=count)) {
-        t->res->lpVtbl->Release(t->res);t->res=NULL;
-        if(t->up) {t->up->lpVtbl->Release(t->up);t->up=NULL;}
+        port_texture_release_slot_storage(t);
     }
     D3D12_RESOURCE_DESC td={0};td.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     td.Width=w;td.Height=h;td.DepthOrArraySize=(UINT16)faces;td.MipLevels=(UINT16)count;
@@ -109,6 +180,7 @@ static int vp_upload_tex_slot(u32 off,u32 w,u32 h,u32 fmt,int cube,u32 mips,u32 
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprints[6*RSX_MAX_TEXTURE_LEVELS];
     UINT64 upload_bytes=0;
     s_d3d.device->lpVtbl->GetCopyableFootprints(s_d3d.device,&td,0,faces*count,0,footprints,NULL,NULL,&upload_bytes);
+    size_t resource_bytes = t->retained_bytes - t->source_size;
     int fresh=!t->res;
     if(fresh) {
         D3D12_HEAP_PROPERTIES hp={0};hp.Type=D3D12_HEAP_TYPE_DEFAULT;
@@ -121,6 +193,15 @@ static int vp_upload_tex_slot(u32 off,u32 w,u32 h,u32 fmt,int cube,u32 mips,u32 
         hr=s_d3d.device->lpVtbl->CreateCommittedResource(s_d3d.device,&hp,D3D12_HEAP_FLAG_NONE,&bd,
             D3D12_RESOURCE_STATE_GENERIC_READ,NULL,&IID_ID3D12Resource,(void**)&t->up);
         if(FAILED(hr)) {t->res->lpVtbl->Release(t->res);t->res=NULL;return -1;}
+        D3D12_RESOURCE_ALLOCATION_INFO texture_allocation, buffer_allocation;
+        s_d3d.device->lpVtbl->GetResourceAllocationInfo(s_d3d.device, &texture_allocation, 0, 1, &td);
+        s_d3d.device->lpVtbl->GetResourceAllocationInfo(s_d3d.device, &buffer_allocation, 0, 1, &bd);
+        if (texture_allocation.SizeInBytes == UINT64_MAX || buffer_allocation.SizeInBytes == UINT64_MAX) {
+            fprintf(stderr, "[mip-upload] could not query texture allocation size\n");
+            port_texture_release_slot_storage(t);
+            return -1;
+        }
+        resource_bytes = texture_allocation.SizeInBytes + buffer_allocation.SizeInBytes;
     }
     u8* snapshot=(u8*)realloc(t->source_bytes,(size_t)span);
     if(!snapshot) {fprintf(stderr,"[mip-upload] source snapshot allocation failed\n");abort();}
@@ -128,7 +209,7 @@ static int vp_upload_tex_slot(u32 off,u32 w,u32 h,u32 fmt,int cube,u32 mips,u32 
     memcpy(snapshot,vm_base+off,(size_t)span);
     void* mapped=NULL;D3D12_RANGE read={0,0};
     if(FAILED(t->up->lpVtbl->Map(t->up,0,&read,&mapped)) || !mapped) {
-        if(fresh) {t->res->lpVtbl->Release(t->res);t->res=NULL;t->up->lpVtbl->Release(t->up);t->up=NULL;}
+        port_texture_release_slot_storage(t);
         return -1;
     }
     for(u32 face=0;face<faces;face++) for(u32 mip=0;mip<count;mip++) {
@@ -152,8 +233,18 @@ static int vp_upload_tex_slot(u32 off,u32 w,u32 h,u32 fmt,int cube,u32 mips,u32 
     barrier.Transition.StateBefore=D3D12_RESOURCE_STATE_COPY_DEST;
     barrier.Transition.StateAfter=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list,1,&barrier);
+    if (profile) {
+        ++s_port_texture_profile.upload_calls;
+        s_port_texture_profile.upload_bytes += upload_bytes;
+        s_port_texture_profile.upload_seconds += perf_now() - upload_started;
+    }
+    s_port_texture_retained_bytes -= t->retained_bytes;
+    t->retained_bytes = resource_bytes + (size_t)span;
+    s_port_texture_retained_bytes += t->retained_bytes;
     t->off=t->key=off;t->w=w;t->h=h;t->fmt=fmt;t->cube=cube;t->mip_levels=count;t->source_pitch=pitch;
     t->source_size=(size_t)span;t->used=1;port_texture_touch(t);
+    t->source_version = version;
+    port_texture_trim(PORT_TEXTURE_CACHE_BYTES);
     static int trace=-1;static unsigned traces;
     if(trace<0) trace=getenv("PORT_MIP_TRACE")?1:0;
     if(trace && traces++<128) fprintf(stderr,"[mip-upload] source=%08X size=%ux%u fmt=%02X levels=%u faces=%u pitch=%u span=%llu slot=%d\n",
@@ -161,14 +252,31 @@ static int vp_upload_tex_slot(u32 off,u32 w,u32 h,u32 fmt,int cube,u32 mips,u32 
     return slot;
 }
 
+/* The bounded queue wait can return on timeout or device loss. Check the
+ * actual fence before releasing pins or destroying resources from a batch. */
+static int port_texture_fence_complete(ID3D12Fence* fence, UINT64 submitted)
+{
+    if (!fence) return 0;
+    UINT64 completed = fence->lpVtbl->GetCompletedValue(fence);
+    return completed != UINT64_MAX && completed >= submitted;
+}
+
+static void port_require_texture_fence(void)
+{
+    if (s_port_texture_retained_bytes &&
+        !port_texture_fence_complete(s_d3d.fence, s_d3d.fence_values[s_d3d.frame_index])) {
+        fprintf(stderr, "[mip-upload] texture cache still owned by submission %llu\n",
+                (unsigned long long)s_d3d.fence_values[s_d3d.frame_index]);
+        abort();
+    }
+}
+
 /* Call only after the owning submission fence, or from an isolated fixture. */
 static void port_mip_release_cache(void)
 {
     for(unsigned i=0;i<s_d3d.vp_tex_capacity;i++) {
         VPTexSlot* t=&s_d3d.vp_tex[i];
-        if(t->res) t->res->lpVtbl->Release(t->res);
-        if(t->up) t->up->lpVtbl->Release(t->up);
-        free(t->source_bytes);
+        port_texture_release_slot_storage(t);
     }
     free(s_d3d.vp_tex);s_d3d.vp_tex=NULL;s_d3d.vp_tex_capacity=0;
 }

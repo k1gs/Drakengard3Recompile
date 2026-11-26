@@ -10,7 +10,8 @@ def prepare(text):
         text = text.replace(old, new)
 
     once('    u32 off, w, h, fmt; /* current contents',
-         '    u32 mip_levels, source_pitch;\n    u8* source_bytes;\n    size_t source_size;\n    u32 off, w, h, fmt; /* current contents')
+         '    u32 mip_levels, source_pitch;\n    u8* source_bytes;\n    size_t source_size;\n'
+         '    u64 source_version;\n    u32 off, w, h, fmt; /* current contents')
     once('        u32 sampler_address,', '        u32 source_pitch;\n        u32 sampler_address,')
     once('fmt, ctrl1, mips, sampler_address,', 'fmt, ctrl1, mips, source_pitch, sampler_address,')
     once('        COPY_TEX(sampler_address);', '        COPY_TEX(source_pitch);COPY_TEX(sampler_address);')
@@ -33,7 +34,11 @@ def prepare(text):
     end=text.index('    port_release_depth_surfaces();',begin)
     if 'free(s_d3d.vp_tex)' not in text[begin:end]:
         raise ValueError('Pinned texture shutdown changed')
-    text=text[:begin]+'    port_mip_release_cache();\n'+text[end:]
+    text=text[:begin]+'    port_require_texture_fence();\n    port_mip_release_cache();\n'+text[end:]
+    unpin = 'for (unsigned _i = 0; _i < s_d3d.vp_tex_capacity; _i++) s_d3d.vp_tex[_i].used = 0;'
+    batch_timer = '    double _pre0 = perf_on() ? perf_now() : 0.0;'
+    once(batch_timer, '    port_require_texture_fence();\n' + batch_timer)
+    once(unpin, unpin + '\n    port_texture_trim(PORT_TEXTURE_CACHE_BYTES);')
     # Every SRV exposes the resource's actual chain; null and render-target
     # views remain one level because their underlying resources are one level.
     begin=text.index('static void srv_write_ex(')

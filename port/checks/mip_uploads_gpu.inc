@@ -1,6 +1,84 @@
 /* Actual uploader, not a second implementation. Golden source layouts below
  * include rectangular Morton data, fixed-pitch linear levels, BC tails and
  * packed/linear cube face strides. Read back every uploaded subresource. */
+struct TextureVersionView {
+    int slot;
+    u8 fill;
+    u32 changed[2];
+    u8 values[2];
+};
+
+enum { version_side = 256, version_bytes = version_side * version_side, version_views = 7 };
+
+static int upload_version_view(u32 address)
+{
+    return vp_upload_tex_slot(address, version_side, version_side, 0xA1, 0, 1, version_side);
+}
+
+/* Keep each recorded resource until the readback fence. The two unaligned
+ * guest ranges overlap by 56 KiB. A lookup through one range must preserve
+ * a shared write for the other range, even after collecting the OS write bits. */
+static int check_texture_versions(struct TextureVersionView views[version_views])
+{
+    const u32 a = 0x61000003;
+    const u32 b = a + 0x2000;
+    memset(vm_base + a, 0x11, version_bytes + (b - a));
+    int a_original = upload_version_view(a);
+    int b_original = upload_version_view(b);
+    if (a_original < 0 || b_original < 0 ||
+        upload_version_view(a) != a_original || upload_version_view(b) != b_original)
+        return 0;
+
+    vm_base[a + 0x3000] = 0x22;
+    int a_changed = upload_version_view(a);
+    int b_shared = upload_version_view(b);
+    if (a_changed < 0 || a_changed == a_original || b_shared < 0 || b_shared == b_original)
+        return 0;
+
+    vm_base[b + 0xF000] = 0x33;
+    int b_changed = upload_version_view(b);
+    if (b_changed < 0 || b_changed == b_shared || b_changed == b_original)
+        return 0;
+    vm_base[a + 0x3000] = 0x11;
+    if (upload_version_view(a) != a_original) return 0;
+
+    /* A free stale entry precedes a matching resource already in use. */
+    const u32 c = 0x62000003;
+    memset(vm_base + c, 0x44, version_bytes);
+    int c_original = upload_version_view(c);
+    if (c_original < 0) return 0;
+    vm_base[c + 0x1234] = 0x55;
+    int c_changed = upload_version_view(c);
+    if (c_changed < 0 || c_changed == c_original) return 0;
+    s_d3d.vp_tex[c_original].used = 0;
+    if (upload_version_view(c) != c_changed) return 0;
+
+    views[0] = (struct TextureVersionView){a_original, 0x11};
+    views[1] = (struct TextureVersionView){a_changed, 0x11, {0x3000}, {0x22}};
+    views[2] = (struct TextureVersionView){b_original, 0x11};
+    views[3] = (struct TextureVersionView){b_shared, 0x11, {0x1000}, {0x22}};
+    views[4] = (struct TextureVersionView){b_changed, 0x11, {0x1000, 0xF000}, {0x22, 0x33}};
+    views[5] = (struct TextureVersionView){c_original, 0x44};
+    views[6] = (struct TextureVersionView){c_changed, 0x44, {0x1234}, {0x55}};
+    return 1;
+}
+
+static int version_readback_matches(const struct TextureVersionView* view, const u8* pixels, u32 pitch)
+{
+    for (u32 y = 0; y < version_side; ++y) {
+        for (u32 x = 0; x < version_side; ++x) {
+            u32 index = y * version_side + x;
+            u8 expected = view->fill;
+            for (unsigned m = 0; m < 2; ++m) {
+                if (view->changed[m] && view->changed[m] == index)
+                    expected = view->values[m];
+            }
+            if (pixels[y * pitch + x] != expected) return 0;
+        }
+    }
+    return 1;
+}
+
 int port_check_mip_uploads_gpu(void)
 {
     if(s_d3d.device || s_d3d.vp_tex) return 2;
@@ -23,7 +101,8 @@ int port_check_mip_uploads_gpu(void)
         {0x85,4,4,0,6,128,84,{0,64,80}}
     };
     struct Record {int slot;unsigned test,mutation,levels;u32 first;};
-    struct Record records[13];unsigned record_count=0,total_subs=0;
+    struct TextureVersionView views[version_views];
+    struct Record records[13 + version_views];unsigned record_count=0,total_subs=0;
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp[216];UINT64 total=0;
 #define MIP_TRY(call) do {hr=(call);if(FAILED(hr)) goto cleanup;} while(0)
     hr=D3D12CreateDevice(NULL,D3D_FEATURE_LEVEL_11_0,&IID_ID3D12Device,(void**)&device);
@@ -39,6 +118,7 @@ int port_check_mip_uploads_gpu(void)
     MIP_TRY(device->lpVtbl->CreateCommandAllocator(device,qd.Type,&IID_ID3D12CommandAllocator,&allocator));
     MIP_TRY(device->lpVtbl->CreateCommandList(device,0,qd.Type,allocator,NULL,&IID_ID3D12GraphicsCommandList,&list));
     MIP_TRY(device->lpVtbl->CreateFence(device,0,D3D12_FENCE_FLAG_NONE,&IID_ID3D12Fence,&fence));
+    if (port_texture_fence_complete(fence, 1)) goto cleanup;
     event=CreateEventA(NULL,FALSE,FALSE,NULL);if(!event) goto cleanup;
     s_d3d.cmd_list=list;
     for(unsigned test=0;test<sizeof(cases)/sizeof(cases[0]);test++) {
@@ -99,6 +179,13 @@ int port_check_mip_uploads_gpu(void)
             records[record_count++]=(struct Record){other,test,0,3,0};
         }
     }
+    if (!check_texture_versions(views)) {
+        fprintf(stderr, "[mip-test] overlapping ranges or retained texture lookup failed\n");
+        goto cleanup;
+    }
+    const unsigned layout_records = record_count;
+    for (unsigned i = 0; i < version_views; ++i)
+        records[record_count++] = (struct Record){views[i].slot, 0, 0, 1, 0};
     for(unsigned r=0;r<record_count;r++) {
         struct Record* rec=&records[r];VPTexSlot* t=&s_d3d.vp_tex[rec->slot];
         D3D12_RESOURCE_DESC td;t->res->lpVtbl->GetDesc(t->res,&td);
@@ -120,7 +207,7 @@ int port_check_mip_uploads_gpu(void)
         b.Transition.pResource=t->res;b.Transition.Subresource=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         b.Transition.StateBefore=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;b.Transition.StateAfter=D3D12_RESOURCE_STATE_COPY_SOURCE;
         list->lpVtbl->ResourceBarrier(list,1,&b);
-        unsigned count=rec->levels*cases[rec->test].faces;
+        unsigned count = r < layout_records ? rec->levels * cases[rec->test].faces : 1;
         for(unsigned sub=0;sub<count;sub++) {
             D3D12_TEXTURE_COPY_LOCATION src={0},dst={0};src.pResource=t->res;src.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;src.SubresourceIndex=sub;
             dst.pResource=readback;dst.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;dst.PlacedFootprint=fp[rec->first+sub];
@@ -132,9 +219,21 @@ int port_check_mip_uploads_gpu(void)
     MIP_TRY(queue->lpVtbl->Signal(queue,fence,1));MIP_TRY(fence->lpVtbl->SetEventOnCompletion(fence,1,event));
     if(WaitForSingleObject(event,5000)!=WAIT_OBJECT_0 || fence->lpVtbl->GetCompletedValue(fence)<1) abort();
     u8* data=NULL;D3D12_RANGE range={0,(SIZE_T)total};MIP_TRY(readback->lpVtbl->Map(readback,0,&range,(void**)&data));
-    ok=cache_hit && pinned && level_key && pitch_key;
+    ok=cache_hit && pinned && level_key && pitch_key && port_texture_fence_complete(fence, 1);
     for(unsigned r=0;r<record_count;r++) {
-        struct Record* rec=&records[r];const struct Test* c=&cases[rec->test];u32 base=c->fmt&0x9F;
+        struct Record* rec = &records[r];
+        if (r >= layout_records) {
+            const struct TextureVersionView* view = &views[r - layout_records];
+            const D3D12_PLACED_SUBRESOURCE_FOOTPRINT* f = &fp[rec->first];
+            if (version_readback_matches(view, data + f->Offset, f->Footprint.RowPitch)) {
+                ++checked;
+            } else {
+                fprintf(stderr, "[mip-test] version view %u differs after GPU readback\n", r - layout_records);
+                ok = 0;
+            }
+            continue;
+        }
+        const struct Test* c=&cases[rec->test];u32 base=c->fmt&0x9F;
         for(unsigned face=0;face<c->faces;face++) for(unsigned mip=0;mip<rec->levels;mip++) {
             D3D12_PLACED_SUBRESOURCE_FOOTPRINT* f=&fp[rec->first+face*rec->levels+mip];
             u8* bytes=data+f->Offset;int valid=1;u32 w=c->w>>mip,h=c->h>>mip;if(!w)w=1;if(!h)h=1;
@@ -153,7 +252,18 @@ int port_check_mip_uploads_gpu(void)
             if(valid)checked++;else {ok=0;fprintf(stderr,"[mip-test] case=%u face=%u mip=%u failed\n",rec->test,face,mip);}
         }
     }
+    ok = ok && checked == total_subs;
     D3D12_RANGE written={0,0};readback->lpVtbl->Unmap(readback,0,&written);
+    /* The fence has completed. Only C's original slot is idle. */
+    VPTexSlot* idle = &s_d3d.vp_tex[views[5].slot];
+    size_t pinned_bytes = s_port_texture_retained_bytes - idle->retained_bytes;
+    port_texture_trim(0);
+    if (idle->res || !pinned_bytes || s_port_texture_retained_bytes != pinned_bytes)
+        ok = 0;
+    for (unsigned i = 0; i < s_d3d.vp_tex_capacity; ++i)
+        s_d3d.vp_tex[i].used = 0;
+    port_texture_trim(0);
+    if (s_port_texture_retained_bytes) ok = 0;
 cleanup:
     fprintf(stderr,"[compat-check] mip GPU device=%s subresources=%u/%u cache=%d pinned=%d level-key=%d pitch-key=%d %s hr=%08lX\n",
         software?"WARP":"hardware",checked,total_subs,cache_hit,pinned,level_key,pitch_key,ok?"PASS":"FAIL",(unsigned long)hr);
