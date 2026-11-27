@@ -34,6 +34,16 @@ def prepare(sdk):
     if source.count(anchor) != 1 or 'case 6:' in source:
         raise ValueError('Pinned vertex fetch implementation changed')
     fetch = source[source.index(anchor):].replace(anchor, 'static void port_fetch_attrib(', 1)
+    # Keep the SDK's exact bit conversions in the decoder's translation unit.
+    # Otherwise each float component incurs a separate external function call.
+    readers = source[source.index('float rsx_rd_bef('):source.index(anchor)]
+    for name in ('rsx_rd_bef', 'rsx_rd_half_be'):
+        definition = 'float ' + name + '('
+        if readers.count(definition) != 1 or name + '(' not in fetch:
+            raise ValueError('Pinned vertex component reader changed: ' + name)
+        local = 'port_' + name
+        readers = readers.replace(definition, 'static inline float ' + local + '(')
+        fetch = fetch.replace(name + '(', local + '(')
     # An enabled zero-stride array broadcasts the element at its memory offset.
     # Treating it as disabled substitutes the immediate attribute register.
     guard = '    if (!a->enabled || a->stride == 0 || !vm_base) return;'
@@ -49,7 +59,7 @@ def prepare(sdk):
         break;
 ''' + anchor)
     fetch = split_vertex_fetch(fetch, enabled_guard)
-    return r'''
+    return readers + r'''
 /* CMP expands signed 11/11/10 fields into the high bits of signed 16-bit
  * lanes, then normalizes by 32767. Do not divide by 1023/511 or clamp.
  * Semantics oracle (read only): RPCS3 RSXVertexFetch.glsl, COMP32 branch. */
