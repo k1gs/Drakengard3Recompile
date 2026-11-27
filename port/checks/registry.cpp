@@ -53,6 +53,7 @@ extern "C"
     int port_check_fifo_flip_boundary();
     int port_check_fifo_engine_isolation();
     int port_check_fifo_semaphore();
+    int port_check_gcm_constant_packet();
     int port_check_prepare_flip();
     int port_check_spu_interpreter_halt();
     int port_check_spu_task_null_branch();
@@ -69,6 +70,7 @@ struct Check
     int (*run)();
 };
 const Check checks[] = {
+    {"--check-gcm-constant-packet", port_check_gcm_constant_packet},
     {"--check-nv0039", port_check_nv0039},
     {"--check-gcm-address-space", port_check_gcm_address_space},
     {"--check-rt-layouts-gpu", port_check_rt_layouts_gpu},

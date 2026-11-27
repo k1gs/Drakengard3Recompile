@@ -1,6 +1,7 @@
 """Preserve pending GPU commands and expose their real IO mapping for diagnosis."""
 from pathlib import Path
 from prepare_nv0039 import prepare as prepare_nv0039
+from prepare_fifo_constant_stream import prepare as prepare_fifo_constant_stream
 from compat_source import resolve_local_includes, write_if_changed
 
 
@@ -421,6 +422,7 @@ static void port_fifo_wrap_reset(void) { memset(&port_fifo_wrap,0,sizeof(port_fi
                       '    port_fifo_wrap_reset();\n    port_gcm_report_reset();\n    port_nv0039_reset();\n    memset(s_report_data,')
     text='static void port_fifo_wrap_reset(void);\nstatic void port_gcm_report_reset(void);\n'+text
     text = prepare_semaphore_wait(text)
+    text = prepare_fifo_constant_stream(text)
     text = prepare_display_queue(text, source, sdk, output)
     target=output/'cellGcmSys_compat.c'
     if not target.exists() or target.read_text(encoding='utf-8')!=text:
