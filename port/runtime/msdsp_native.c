@@ -15,15 +15,31 @@ enum
 };
 static int native_enabled; /* Set before starting any guest threads. */
 
-static int matches(const spu_context *ctx)
+static const struct dsp_module
 {
-    /* Validate every module byte, not just the first plugin's GUID. Heap
-     * addresses vary; the compiled PIC code is valid only at these LS bases.
-     * Padding between modules is not executable and need not match. */
-    return ctx && ctx->ls && ctx->image_id == 41 &&
-           !memcmp(ctx->ls + 0x37000, port_msdsp_bytes, 0x1F80) &&
-           !memcmp(ctx->ls + 0x39000, port_msdsp_bytes + 0x2000, 0x890) &&
-           !memcmp(ctx->ls + 0x39900, port_msdsp_bytes + 0x2900, 0x420);
+    uint32_t base;
+    uint32_t size;
+} modules[] = {{DSP_BASE, 0x1F80}, {0x39000, 0x890}, {0x39900, 0x420}};
+
+static int matches(const spu_context *ctx, uint32_t pc)
+{
+    int contains_pc = 0;
+    for (size_t i = 0; i < sizeof(modules) / sizeof(modules[0]); ++i)
+    {
+        const struct dsp_module *module = &modules[i];
+        int in_module = pc - module->base < module->size;
+        contains_pc |= in_module;
+#ifdef PORT_MSDSP_INDEPENDENT_LIFTS
+        /* A neighbouring ELF may use this LS address for its own BSS.
+         * Older combined lifts can bind across modules and require all three. */
+        if (!in_module)
+            continue;
+#endif
+        const uint8_t *reference = port_msdsp_bytes + (module->base - DSP_BASE);
+        if (memcmp(ctx->ls + module->base, reference, module->size) != 0)
+            return 0;
+    }
+    return contains_pc;
 }
 #endif
 
@@ -45,12 +61,13 @@ port_spu_fn port_msdsp_lookup(const spu_context *ctx, uint32_t pc)
         if (audio) return audio;
     }
 #ifdef PORT_WITH_MSDSP
-    if (!ctx || ctx->image_id != 41 || pc < DSP_BASE || pc >= 0x39D20)
+    if (pc < DSP_BASE || pc - DSP_BASE >= sizeof(port_msdsp_bytes) ||
+        !ctx || !ctx->ls || ctx->image_id != 41)
         return NULL;
     if (!native_enabled)
         return NULL;
     port_spu_fn fn = spu_lookup(pc, DSP_IMAGE);
-    if (!fn || !matches(ctx))
+    if (!fn || !matches(ctx, pc))
         return NULL;
     static _Thread_local int announced;
     if (!announced)

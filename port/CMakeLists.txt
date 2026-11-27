@@ -208,7 +208,8 @@ option(PORT_ENABLE_SPU "Compile and register the title's lifted SPU images" ON)
 
 set(SPU_SOURCES "")
 if(PORT_ENABLE_SPU)
-    file(GLOB SPU_LIFTED CONFIGURE_DEPENDS "${SPU_DIR}/*/spu_recomp.c")
+    file(GLOB SPU_LIFTED CONFIGURE_DEPENDS "${SPU_DIR}/*/spu_recomp.c"
+        "${SPU_DIR}/msdsp_native/plugin_*/spu_recomp.c")
     if(SPU_LIFTED)
         list(LENGTH SPU_LIFTED SPU_IMAGE_COUNT)
         message(STATUS "Lifted SPU:      ${SPU_IMAGE_COUNT} image(s)")

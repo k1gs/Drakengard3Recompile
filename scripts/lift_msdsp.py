@@ -50,6 +50,28 @@ def extract(data):
     return bytes(block), sorted(seeds), spans
 
 
+def lift_module(sdk, output, base, code, seeds):
+    output.mkdir()
+    raw = output / 'plugin.bin'
+    elf = output / 'plugin.elf'
+    raw.write_bytes(code)
+    prefix = f'port_msdsp_{base:05x}_'
+    subprocess.run([sys.executable, str(sdk / 'tools/wrap_spu_elf.py'), str(raw),
+                    '--base', hex(base), '--entry', hex(seeds[0]), '--out', str(elf)], check=True)
+    subprocess.run([sys.executable, str(sdk / 'tools/spu_lifter.py'), '--auto-functions', str(elf),
+                    '--extra-funcs', ','.join(map(hex, seeds)), '--symbol-prefix', prefix,
+                    '-o', str(output)], check=True)
+    for name in ('spu_recomp.c', 'spu_recomp.h'):
+        path = output / name
+        text = path.read_text(encoding='utf-8')
+        for header in ('spu_context.h', 'spu_helpers.h'):
+            text = text.replace(f'"../../runtime/spu/{header}"', f'"{header}"')
+        if '/* TODO spu:' in text:
+            raise ValueError(f'DSP module at {base:#x} contains unsupported instructions')
+        path.write_text(text, encoding='utf-8')
+    return prefix + 'spu_recomp_register'
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('eboot', type=Path)
@@ -65,22 +87,22 @@ def main():
     if a.out.exists():
         p.error('Choose a fresh output directory')
     a.out.mkdir(parents=True)
-    raw, elf = a.out / 'plugins.bin', a.out / 'plugins.elf'
-    raw.write_bytes(block)
-    subprocess.run([sys.executable, str(a.sdk/'tools/wrap_spu_elf.py'), str(raw),
-                    '--base', '0x37000', '--entry', hex(seeds[0]), '--out', str(elf)], check=True)
-    subprocess.run([sys.executable, str(a.sdk/'tools/spu_lifter.py'), '--auto-functions', str(elf),
-                    '--extra-funcs', ','.join(hex(s) for s in seeds), '--symbol-prefix', 'port_msdsp_',
-                    '-o', str(a.out)], check=True)
-    for name in ('spu_recomp.c', 'spu_recomp.h'):
-        path = a.out/name
-        text = path.read_text(encoding='utf-8')
-        for header in ('spu_context.h', 'spu_helpers.h'):
-            text = text.replace(f'"../../runtime/spu/{header}"', f'"{header}"')
-        if '/* TODO spu:' in text:
-            raise ValueError('DSP lift contains unsupported instructions')
-        path.write_text(text, encoding='utf-8')
+    (a.out / 'plugins.bin').write_bytes(block)
+    # Each lifter invocation sees just its own ELF segment. A transfer to a
+    # different plugin must reenter dispatch and validate that plugin's bytes.
+    registers = []
+    for base, size in spans:
+        offset = base - spans[0][0]
+        entries = [entry for entry in seeds if base <= entry < base + size]
+        registers.append(lift_module(a.sdk, a.out / f'plugin_{base:05x}', base,
+                                     block[offset:offset + size], entries))
+    registration = [f'extern void {name}(void);' for name in registers]
+    registration += ['', 'void port_msdsp_spu_recomp_register(void)', '{']
+    registration += [f'    {name}();' for name in registers]
+    registration += ['}']
+    (a.out / 'spu_recomp.c').write_text('\n'.join(registration) + '\n', encoding='utf-8')
     rows = ['/* Generated from user-supplied EBOOT; never publish. */',
+            '#define PORT_MSDSP_INDEPENDENT_LIFTS 1',
             'static const unsigned char port_msdsp_bytes[] = {']
     rows += ['    '+','.join(f'0x{x:02X}' for x in block[i:i+16])+',' for i in range(0,len(block),16)]
     rows += ['};', 'extern void port_msdsp_spu_recomp_register(void);']
