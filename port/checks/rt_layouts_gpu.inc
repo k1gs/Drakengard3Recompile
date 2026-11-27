@@ -13,7 +13,8 @@ static int port_rt_check_guest_pipeline(ID3D12Resource** constants,int slots[2])
         "float4 col0:COLOR0;float4 col1:COLOR1;float4 fog:FOG;"
         "float4 t0:TEXCOORD0;float4 t1:TEXCOORD1;float4 t2:TEXCOORD2;float4 t3:TEXCOORD3;"
         "float4 t4:TEXCOORD4;float4 t5:TEXCOORD5;float4 t6:TEXCOORD6;float4 t7:TEXCOORD7;};"
-        "V main(uint i:SV_VertexID){V v=(V)0;v.position=float4(i==2?3:-1,i==1?3:-1,0,1);return v;}";
+        "V main(uint i:SV_VertexID){V v=(V)0;v.position=float4(i==2?3:-1,i==1?3:-1,0,1);"
+        "v.t0=float4(v.position.x*.25,v.position.y*.125,7,v.position.y*.75);return v;}";
     port_rt_require(D3DCompile(shader,strlen(shader),NULL,NULL,NULL,"main","vs_5_0",0,0,&s_d3d.vp_vs_blob,NULL));
     D3D12_ROOT_PARAMETER param={0};
     param.ParameterType=D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -30,13 +31,27 @@ static int port_rt_check_guest_pipeline(ID3D12Resource** constants,int slots[2])
     extern u32 cellGcmResolveLocated(int,u32);
     D3D12DrawRecord draw={0};draw.fp_addr=0x501;
     u8* program=vm_base+cellGcmResolveLocated(1,0x500);
-    memset(program,0,32);
-    port_fp_word(program,(1u<<24)|(15u<<9)|1u);
-    port_fp_word(program+4,2u|(1u<<11)|(2u<<13)|(3u<<15)|(7u<<18)|(1u<<23)|(2u<<25)|(3u<<27));
+    /* Target 0 still exports the buffered constant. Target 1 starts with the
+     * same nonzero lanes, then masked DDX/DDY replace them using TEX0. */
+    const u32 program_bytes = 80;
+    const u32 always = 7u << 18;
+    const u32 xyzw = (1u << 11) | (2u << 13) | (3u << 15);
+    const u32 dest_r2 = 2u << 1;
+    const u32 tex0 = 4u << 13;
+    memset(program, 0, program_bytes);
+    port_fp_word(program, (1u << 24) | (15u << 9));
+    port_fp_word(program + 4, 2u | xyzw | always);
     const u32 values[4]={0x3F800000,0x3F000000,0x3E800000,0x3F800000};
     for(unsigned i=0;i<4;i++)port_fp_word(program+16+i*4,values[i]);
+    port_fp_word(program + 32, (1u << 24) | dest_r2 | (15u << 9)); /* MOV r2, r0 */
+    port_fp_word(program + 36, xyzw | always);
+    /* DDX r2.xy, TEX0.zxxx. DDY r2.zw, -TEX0.xxwy (END). */
+    port_fp_word(program + 48, (0x15u << 24) | dest_r2 | tex0 | (3u << 9));
+    port_fp_word(program + 52, 1u | (2u << 9) | always);
+    port_fp_word(program + 64, (0x16u << 24) | dest_r2 | tex0 | (12u << 9) | 1u);
+    port_fp_word(program + 68, 1u | (3u << 13) | (1u << 15) | (1u << 17) | always);
     port_snapshot_fp(&draw);
-    memset(program,0xCD,32);
+    memset(program, 0xCD, program_bytes);
     *constants=port_rt_buffer(VP_FPCB_STRIDE,D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ,0);
     float* data=NULL;D3D12_RANGE none={0,0};
     port_rt_require((*constants)->lpVtbl->Map(*constants,0,&none,(void**)&data));
@@ -314,6 +329,15 @@ int port_check_rt_layouts_gpu(void)
     const u8 guest_pixel[8]={0x3C,0,0x38,0,0x34,0,0x3C,0};
     for(unsigned i=0;i<4;i++)memcpy(mixed_expected+i*8,guest_pixel,8);
     port_rt_layout_capture(mixed[0],0,readback,mixed_expected,16,0,0,&records[count++],&total);
+    /* At 2x2, position.x advances by 1 per pixel and position.y by -1 per
+     * row. The UNORM derivative result (0, .25, .75, .125) is in guest ARGB
+     * byte order here; port_rt_layout_capture compares native RGBA rows. */
+    const u8 derivative_argb[4] = {32, 0, 64, 191};
+    u8 derivative_pixels[16];
+    for (unsigned i = 0; i < 4; ++i)
+        memcpy(derivative_pixels + i * 4, derivative_argb, 4);
+    port_rt_layout_capture(mixed[1], 0, readback, derivative_pixels, 8, 0, 0,
+                           &records[count++], &total);
     RT_LAYOUT_TRY(list->lpVtbl->Close(list));
     queue->lpVtbl->ExecuteCommandLists(queue,1,lists);port_rt_require(queue->lpVtbl->Signal(queue,fence,2));s_d3d.fence_values[0]=2;
     port_rt_require(fence->lpVtbl->SetEventOnCompletion(fence,2,event));if(WaitForSingleObject(event,10000)!=WAIT_OBJECT_0)abort();

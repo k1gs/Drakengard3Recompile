@@ -40,6 +40,7 @@ extern "C"
     int port_check_gamepad();
     int port_check_compressed_vertices();
     int port_check_zero_stride_vertices();
+    int port_check_indexed_vertices();
     int port_probe_gamepad();
     int port_check_msdsp();
     int port_check_audio_decoder();
@@ -83,6 +84,7 @@ const Check checks[] = {
     {"--check-queue-wake", port_check_queue_wake},
     {"--check-compressed-vertices", port_check_compressed_vertices},
     {"--check-zero-stride-vertices", port_check_zero_stride_vertices},
+    {"--check-indexed-vertices", port_check_indexed_vertices},
     {"--check-gamepad", port_check_gamepad},
     {"--check-taskset-arguments", port_check_taskset_arguments},
     {"--check-task-write-watch", port_check_task_write_watch},

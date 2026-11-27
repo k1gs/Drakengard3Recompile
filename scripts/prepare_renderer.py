@@ -56,6 +56,14 @@ def prepare(sdk, output):
         if fp_text.count(old)!=1:
             raise ValueError('Pinned fragment register declaration changed: '+old)
         fp_text=fp_text.replace(old,new)
+    # DDX and DDY take the derivative of the swizzled, modified source.
+    # The common writeback applies the destination mask, scale and predicate.
+    arithmetic = '        case OP_FRC: snprintf(rhs, sizeof(rhs), "frac(%s)", a); break;'
+    if fp_text.count(arithmetic) != 1:
+        raise ValueError('Pinned fragment arithmetic anchor changed')
+    fp_text = fp_text.replace(arithmetic, arithmetic + '''
+        case OP_DDX: snprintf(rhs, sizeof(rhs), "ddx(%s)", a); break;
+        case OP_DDY: snprintf(rhs, sizeof(rhs), "ddy(%s)", a); break;''')
     fp_target=output/'rsx_fp_decompiler_compat.c'
     if not fp_target.exists() or fp_target.read_text(encoding='utf-8')!=fp_text:
         fp_target.write_text(fp_text,encoding='utf-8')
@@ -751,6 +759,27 @@ static int port_current_display_ready(void)
             prepare_vertex_fetch(sdk)+'\nstatic void read_vp_vertex(const rsx_state* state, u32 vi, VPSlot* out16)')
     replace('rsx_fetch_attrib(state, i, vi, out16[i].v);',
             'port_fetch_attrib(state, i, vi, out16[i].v);')
+    replace('/* Indexed variants of the VP-path uploads. */',
+            '#include "renderer_indexed_vertices.inc"\n#include "checks/indexed_vertices.inc"')
+    replace('''      for (u32 k = 0; k < count; k++)
+          read_vp_vertex(state, read_guest_index(state, first + k), &out[k*16]);
+      if (perf_on()) { s_perf_vtx += perf_now() - _tv; s_perf_nverts += count; } }''',
+            '''      u32 reused = port_expand_indexed_vertices(state, first, count, out);
+      if (perf_on()) {
+          s_perf_vtx += perf_now() - _tv;
+          s_perf_nverts += count;
+          s_perf_indexed += count;
+          s_perf_vertex_reuses += reused;
+      }
+    }''')
+    replace('static u64    s_perf_nverts = 0;',
+            'static u64 s_perf_indexed, s_perf_vertex_reuses;\nstatic u64 s_perf_nverts = 0;')
+    replace('            s_perf_ntex = 0; s_perf_texbytes = 0; s_perf_nverts = 0;',
+            '''            fprintf(stderr, "[VP-indexed] count=%llu reused=%llu\\n",
+                    (unsigned long long)s_perf_indexed, (unsigned long long)s_perf_vertex_reuses);
+            s_perf_indexed = 0;
+            s_perf_vertex_reuses = 0;
+            s_perf_ntex = 0; s_perf_texbytes = 0; s_perf_nverts = 0;''')
     # These are launch-time diagnostic options. File triggers remain dynamic;
     # the renderer thread snapshots environment values on their first use.
     replace('getenv("RSX_CAP_DIR")','port_renderer_capture_dir()',5)

@@ -1,6 +1,33 @@
 """Checked build-local vertex decoding for the D3D12 renderer."""
 
 
+def split_vertex_fetch(fetch, guard):
+    """Share the pinned address calculation and decoder with indexed uploads."""
+    prefix, source_and_decode = fetch.split(guard)
+    component_count = '    u32 n = a->size ? a->size : 4; if (n > 4) n = 4;'
+    source, decode = source_and_decode.split(component_count)
+    pointer = '    const u8* p = vm_base +'
+    if source.count(pointer) != 1 or not decode.lstrip().startswith('switch (a->type)'):
+        raise ValueError('Pinned vertex array address or decoder changed')
+
+    return ('''static const u8* port_vertex_source(const rsx_state* st, int idx, u32 vi)
+{
+    const rsx_vertex_attrib* a = &st->vertex_attribs[idx];'''
+            + source.replace(pointer, '    return vm_base +') + '''}
+
+static u32 port_vertex_components(const rsx_vertex_attrib* a)
+{
+    return a->size && a->size < 4 ? a->size : 4;
+}
+
+static void port_decode_attrib(const rsx_vertex_attrib* a, int idx, u32 n,
+                               const u8* p, float out[4])
+{''' + decode + '\n' + prefix + guard + '''
+    port_decode_attrib(a, idx, port_vertex_components(a), port_vertex_source(st, idx, vi), out);
+}
+''')
+
+
 def prepare(sdk):
     source = (sdk / 'libs/video/rsx_vertex_fetch.c').read_text(encoding='utf-8')
     anchor = 'void rsx_fetch_attrib('
@@ -12,7 +39,8 @@ def prepare(sdk):
     guard = '    if (!a->enabled || a->stride == 0 || !vm_base) return;'
     if fetch.count(guard) != 1:
         raise ValueError('Pinned vertex array enable guard changed')
-    fetch = fetch.replace(guard, '    if (!a->enabled || !vm_base) return;')
+    enabled_guard = '    if (!a->enabled || !vm_base) return;'
+    fetch = fetch.replace(guard, enabled_guard)
     anchor = '    case 7: /* UB256: u8 unnormalized */'
     if fetch.count(anchor) != 1:
         raise ValueError('Pinned vertex format switch changed')
@@ -20,6 +48,7 @@ def prepare(sdk):
         port_decode_cmp_vertex(p, out);
         break;
 ''' + anchor)
+    fetch = split_vertex_fetch(fetch, enabled_guard)
     return r'''
 /* CMP expands signed 11/11/10 fields into the high bits of signed 16-bit
  * lanes, then normalizes by 32767. Do not divide by 1023/511 or clamp.

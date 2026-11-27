@@ -133,6 +133,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_frame_boundaries.py"
     "${PS3RECOMP_DIR}/libs/video/rsx_fp_decompiler.c"
     "${PS3RECOMP_DIR}/libs/video/rsx_vp_decompiler.c"
+    "${PS3RECOMP_DIR}/libs/video/rsx_vertex_fetch.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_vertex_fetch.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_texcoord_varyings.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_pipeline_storage.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_feedback_surfaces.py"
