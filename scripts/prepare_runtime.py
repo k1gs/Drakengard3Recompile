@@ -112,6 +112,20 @@ void port_rsx_display_queued(u32 head, u32 buffer)
     loader_text=loader_text.replace(anchor,anchor+' if(port_gpu_ppu_write64_needed(a)) { port_gpu_ppu_write(a,(unsigned int)(v>>32),__builtin_return_address(0)); port_gpu_ppu_write(a+4,(unsigned int)v,__builtin_return_address(0)); }')
     loader_text='extern "C" void port_gpu_ppu_write(unsigned long long,unsigned int,void*);\n'+loader_text
     loader_text='#include "diagnostics/gpu_writer_gate.h"\n'+loader_text
+    # The hook is reached by every guest vm_write* and atomic write.  Keep
+    # dynamic sync watches visible while skipping it when neither startup
+    # option is present; the hook retains the exact env parsing semantics.
+    anchor='static inline void barrier_watch_hit(uint32_t a, uint32_t v, int width, void* ra)\n{'
+    if loader_text.count(anchor)!=1:
+        raise ValueError('Pinned barrier watch anchor changed')
+    guard='''static inline bool barrier_watch_any_enabled()
+{
+    static const bool env_present = getenv("PPU_WVAL") != nullptr ||
+                                    getenv("PPU_WWATCH") != nullptr;
+    return env_present || g_barrier_sync_watch != 0;
+}
+'''+anchor+'\n    if (!barrier_watch_any_enabled()) return;'
+    loader_text=loader_text.replace(anchor,guard)
     anchor='    } while (0)\n'
     # Notify only after the shared-memory write and coherence publication.
     begin=loader_text.index('#define VM_WRITE_COH(')

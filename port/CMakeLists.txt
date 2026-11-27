@@ -130,6 +130,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/gcm_display_queue.inc"
     "${PS3RECOMP_DIR}/libs/video/cellGcmSys.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_renderer.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_renderer_options.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/renderer_options.inc"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_frame_boundaries.py"
     "${PS3RECOMP_DIR}/libs/video/rsx_fp_decompiler.c"
     "${PS3RECOMP_DIR}/libs/video/rsx_vp_decompiler.c"

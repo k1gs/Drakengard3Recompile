@@ -19,6 +19,7 @@ from prepare_rt_lifetime import prepare as prepare_rt_lifetime
 from prepare_clear import prepare as prepare_clear
 from prepare_color_surfaces import prepare as prepare_color_surfaces
 from prepare_rt_layouts import prepare as prepare_rt_layouts
+from prepare_renderer_options import prepare as prepare_renderer_options
 from compat_source import resolve_local_includes
 
 
@@ -999,6 +1000,7 @@ static int off_rt_get(''')
             'if (m && SUCCEEDED(iq->lpVtbl->GetMessage(iq, mi, m, &len)) &&\n'
             '                    (m->Severity<=D3D12_MESSAGE_SEVERITY_ERROR || _printed<80)) {')
     text = '#include "cellGcmSys_compat.h"\n' + text
+    text=prepare_renderer_options(text)
     text=resolve_local_includes(text, source, sdk)
     target=output/'rsx_d3d12_backend_compat.c'
     if not target.exists() or target.read_text(encoding='utf-8')!=text:
